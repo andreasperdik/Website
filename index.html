@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Capy &amp; Co. — Slow Coffee, Slower Baristas</title>
+<meta name="description" content="Capy &amp; Co. is a riverside coffee bar run entirely by capybaras. Single-origin espresso, four-minute pour-overs, and absolutely no hurrying.">
+<meta name="theme-color" content="#2e1d14">
+<meta property="og:title" content="Capy &amp; Co. — Slow Coffee, Slower Baristas">
+<meta property="og:description" content="A riverside coffee bar run entirely by capybaras. No app. No queue psychology. Just very good coffee, handed over slowly.">
+<meta property="og:type" content="website">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&family=DM+Sans:wght@400;500;700&display=swap">
+<script>
+/* Inline + blocking on purpose: sets the theme and the js flag before first paint,
+   so dark-mode visitors get no light flash and .reveal only hides when JS is alive. */
+(function(){
+  var d = document.documentElement;
+  d.classList.add("js");
+  var t = null;
+  try { t = localStorage.getItem("capy-theme"); } catch (e) {}
+  d.setAttribute("data-theme", t || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+})();
+</script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false" width="0" height="0" style="position:absolute">
+  <symbol id="capyFace" viewBox="0 0 120 110">
+    <ellipse cx="30" cy="27" rx="12" ry="10" fill="var(--fur-dark)"/>
+    <ellipse cx="90" cy="27" rx="12" ry="10" fill="var(--fur-dark)"/>
+    <rect x="16" y="20" width="88" height="80" rx="30" fill="var(--fur)"/>
+    <rect x="32" y="56" width="56" height="42" rx="21" fill="var(--fur-light)"/>
+    <ellipse cx="26" cy="70" rx="8" ry="5.5" fill="var(--blush)"/>
+    <ellipse cx="94" cy="70" rx="8" ry="5.5" fill="var(--blush)"/>
+    <circle cx="41" cy="50" r="5" fill="var(--fur-dark)"/>
+    <circle cx="79" cy="50" r="5" fill="var(--fur-dark)"/>
+    <rect x="51" y="66" width="18" height="11" rx="5.5" fill="var(--fur-dark)"/>
+    <path d="M60 77v6M60 83c-4 5-10 4-12 0M60 83c4 5 10 4 12 0" fill="none" stroke="var(--fur-dark)" stroke-width="3" stroke-linecap="round"/>
+  </symbol>
+</svg>
+
+<header class="site-header" id="siteHeader">
+  <div class="wrap header-inner">
+    <a class="brand" href="#top" aria-label="Capy and Co. home">
+      <svg class="brand-mark" viewBox="0 0 120 110" aria-hidden="true" focusable="false"><use href="#capyFace"/></svg>
+      <span class="brand-text">Capy&nbsp;&amp;&nbsp;Co.</span>
+    </a>
+
+    <nav class="nav" id="nav" aria-label="Main">
+      <ul class="nav-list">
+        <li><a href="#menu">Menu</a></li>
+        <li><a href="#baristas">The Baristas</a></li>
+        <li><a href="#story">Our Story</a></li>
+        <li><a href="#visit">Visit</a></li>
+      </ul>
+    </nav>
+
+    <div class="header-actions">
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch to dark mode" aria-pressed="false">
+        <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/></svg>
+      </button>
+      <button class="menu-toggle" id="menuToggle" type="button" aria-expanded="false" aria-controls="nav" aria-label="Open menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ───────────────────── HERO ───────────────────── -->
+  <section class="hero" id="top">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow reveal">Est. 2019 · Riverbank No. 4</p>
+        <h1 class="reveal">Slow coffee,<br><em>slower</em> baristas.</h1>
+        <p class="lede reveal">We are a coffee bar staffed entirely by capybaras. Nobody here has ever been in a hurry, and it turns out that is excellent for extraction.</p>
+        <div class="hero-actions reveal">
+          <a class="btn btn-primary" href="#menu">See the menu</a>
+          <a class="btn btn-ghost" href="#visit">Find the riverbank</a>
+        </div>
+        <dl class="hero-stats reveal">
+          <div><dt>Pour-over time</dt><dd>4:12</dd></div>
+          <div><dt>Baristas on staff</dt><dd>Seven</dd></div>
+          <div><dt>Times rushed</dt><dd>Zero</dd></div>
+        </dl>
+      </div>
+
+      <div class="hero-art reveal" aria-hidden="true">
+        <svg viewBox="0 0 420 420" class="scene" role="img">
+          <defs>
+            <clipPath id="pot"><rect x="0" y="0" width="420" height="420" rx="24"/></clipPath>
+          </defs>
+          <g clip-path="url(#pot)">
+            <rect width="420" height="420" fill="var(--art-bg)"/>
+            <circle cx="210" cy="196" r="132" fill="var(--art-disc)"/>
+            <!-- steam -->
+            <g class="steam" stroke="var(--art-steam)" stroke-width="7" stroke-linecap="round" fill="none">
+              <path d="M300 168c-10-12 10-22 0-34s8-22 0-32"/>
+              <path d="M330 176c-8-10 8-18 0-28s6-18 0-26"/>
+            </g>
+            <!-- capybara -->
+            <g class="capy">
+              <ellipse cx="118" cy="126" rx="20" ry="17" fill="var(--fur-dark)"/>
+              <ellipse cx="196" cy="126" rx="20" ry="17" fill="var(--fur-dark)"/>
+              <rect x="92" y="112" width="130" height="126" rx="46" fill="var(--fur)"/>
+              <rect x="118" y="176" width="78" height="62" rx="31" fill="var(--fur-light)"/>
+              <ellipse cx="106" cy="196" rx="12" ry="8" fill="var(--blush)"/>
+              <ellipse cx="208" cy="196" rx="12" ry="8" fill="var(--blush)"/>
+              <g class="eyes">
+                <circle cx="128" cy="166" r="7.5" fill="var(--fur-dark)"/>
+                <circle cx="186" cy="166" r="7.5" fill="var(--fur-dark)"/>
+              </g>
+              <rect x="146" y="192" width="22" height="13" rx="6.5" fill="var(--fur-dark)"/>
+              <path d="M157 205v8M157 213c-5 6-13 5-15 0M157 213c5 6 13 5 15 0" fill="none" stroke="var(--fur-dark)" stroke-width="4" stroke-linecap="round"/>
+            </g>
+            <!-- counter -->
+            <rect x="0" y="266" width="420" height="154" fill="var(--art-counter)"/>
+            <rect x="0" y="266" width="420" height="12" fill="var(--art-counter-edge)"/>
+            <!-- cup -->
+            <g class="cup">
+              <path d="M262 186h84v40a42 42 0 0 1-42 42 42 42 0 0 1-42-42z" fill="var(--art-cup)"/>
+              <path d="M346 196h14a20 20 0 0 1 0 40h-6" fill="none" stroke="var(--art-cup)" stroke-width="11" stroke-linecap="round"/>
+              <ellipse cx="304" cy="186" rx="42" ry="11" fill="var(--art-crema)"/>
+              <rect x="248" y="266" width="112" height="10" rx="5" fill="var(--art-cup-shadow)"/>
+            </g>
+            <!-- little paws on counter -->
+            <rect x="122" y="252" width="34" height="22" rx="11" fill="var(--fur)"/>
+            <rect x="176" y="252" width="34" height="22" rx="11" fill="var(--fur)"/>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────── TICKER ───────────────────── -->
+  <div class="ticker" aria-hidden="true">
+    <div class="ticker-track">
+      <span>Slow coffee</span><span>·</span><span>No app</span><span>·</span><span>No loyalty points</span><span>·</span><span>Free river view</span><span>·</span><span>Slow coffee</span><span>·</span><span>No app</span><span>·</span><span>No loyalty points</span><span>·</span><span>Free river view</span><span>·</span>
+    </div>
+  </div>
+
+  <!-- ───────────────────── VALUES ───────────────────── -->
+  <section class="values section" aria-labelledby="values-h">
+    <div class="wrap">
+      <h2 class="section-title reveal" id="values-h">Three things we refuse to speed up</h2>
+      <div class="cards">
+        <article class="card reveal">
+          <svg class="card-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/></svg>
+          <h3>The bloom</h3>
+          <p>Thirty seconds of nothing happening, on purpose. Our head barista once extended it to ninety because the light was nice.</p>
+        </article>
+        <article class="card reveal">
+          <svg class="card-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V9a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v11M4 20h15M17 10h2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-2M8 4V2M12 4V2"/></svg>
+          <h3>The roast</h3>
+          <p>We roast in one-kilo batches on the riverbank and stop at first crack plus a considered pause. Beans rest four days before they meet a grinder.</p>
+        </article>
+        <article class="card reveal">
+          <svg class="card-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-7 3 14 2.5-9 1.5 4h5"/></svg>
+          <h3>The handover</h3>
+          <p>Your cup is placed on the counter, not slid. Eye contact is made. This adds roughly eleven seconds and is the entire point.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────── MENU ───────────────────── -->
+  <section class="section menu" id="menu" aria-labelledby="menu-h">
+    <div class="wrap">
+      <header class="section-head reveal">
+        <h2 class="section-title" id="menu-h">The menu</h2>
+        <p class="section-sub">Prices in riverbank dollars. Milk alternatives never cost extra — we are capybaras, we understand.</p>
+      </header>
+
+      <div class="tabs reveal" role="tablist" aria-label="Menu categories">
+        <button role="tab" id="tab-espresso" aria-controls="panel-espresso" aria-selected="true" class="tab is-active">Espresso bar</button>
+        <button role="tab" id="tab-brew" aria-controls="panel-brew" aria-selected="false" class="tab" tabindex="-1">Slow brew</button>
+        <button role="tab" id="tab-other" aria-controls="panel-other" aria-selected="false" class="tab" tabindex="-1">Not coffee</button>
+        <button role="tab" id="tab-snacks" aria-controls="panel-snacks" aria-selected="false" class="tab" tabindex="-1">Snacks</button>
+      </div>
+
+      <div id="panel-espresso" role="tabpanel" aria-labelledby="tab-espresso" class="panel is-active" tabindex="0">
+        <ul class="menu-list">
+          <li class="menu-item"><div class="mi-head"><h3>The Nibble</h3><span class="dots"></span><span class="price">$3.00</span></div><p>A single shot of whatever we roasted on Tuesday, served with a small glass of river water.</p></li>
+          <li class="menu-item"><div class="mi-head"><h3>Capyccino</h3><span class="dots"></span><span class="price">$4.50</span></div><p>Double shot, six ounces, microfoam thick enough to nap on. Dusted with cocoa in a shape that is trying to be a capybara.</p></li>
+          <li class="menu-item"><div class="mi-head"><h3>Wallow Latte</h3><span class="dots"></span><span class="price">$5.00</span></div><p>Oat milk, brown sugar, a pinch of sea salt. Named for the ninety minutes after lunch when nobody works.</p></li>
+          <li class="menu-item"><div class="mi-head"><h3>Riverbank Cortado</h3><span class="dots"></span><span class="price">$4.00</span></div><p>Equal parts, no foam art, no ceremony. The drink our roaster orders every single day.</p></li>
+          <li class="menu-item"><div class="mi-head"><h3>Muddy Bank Mocha</h3><span class="dots"></span><span class="price">$5.50</span></div><p>Seventy percent dark chocolate melted to order. Genuinely the colour of the bank after rain.</p></li>
+        </ul>
+      </div>
+
+      <div id="panel-brew" role="tabpanel" aria-labelledby="tab-brew" class="panel" tabindex="0" hidden>
+        <ul class="menu-list">
+          <li class="menu-item"><div class="mi-head"><h3>Hot Spring Pour-Over</h3><span class="dots"></span><span class="price">$5.50</span></div><p>Four minutes twelve seconds, poured in five concentric circles. Please do not ask us to hurry; we physically cannot.</p></li>
+          <li class="menu-item"><div class="mi-head"><h3>Dawn Patrol Cold Brew</h3><span class="dots"></span><span class="price">$5.00</span></div><p>Eighteen hours in the cold room. Tastes of cocoa nib and wet stone. Sold out most afternoons.</p></li>
+          <li class="menu-item"><div class="mi-head"><h3>Marsh Mist Iced Filter</h3><span class="dots"></span><span class="price">$4.75</span></div><p>Brewed hot directly onto ice, which halves the aroma loss and doubles the smugness.</p></li>
+          <li class="menu-item"><div class="mi-head"><h3>The Long Sit</h3><span class="dots"></span><span class="price">$9.00</span></div><p>A full 500ml carafe and a seat by the water. Refills of hot water are free and encouraged for the next two hours.</p></li>
+        </ul>
+      </div>
+
+      <div id="panel-other" role="tabpanel" aria-labelledby="tab-other" class="panel" tabindex="0" hidden>
+        <ul class="menu-list">
+          <li class="menu-item"><div class="mi-head"><h3>Matcha Meadow</h3><span class="dots"></span><span class="price">$5.25</span></div><p>Ceremonial grade, whisked by a capybara with a genuinely excellent wrist.</p></li>
+          <li class="menu-item"><div class="mi-head"><h3>Hay-Day Chai</h3><span class="dots"></span><span class="price">$4.75</span></div><p>Cardamom, cinnamon, black pepper, ginger. Simmered forty minutes because that is how long it takes.</p></li>
+          <li class="menu-item"><div class="mi-head"><h3>Yuzu Spring Soda</h3><span class="dots"></span><span class="price">$4.25</span></div><p>House yuzu cordial, sparkling water, one slice of cucumber that we insist improves it.</p></li>
+          <li class="menu-item"><div class="mi-head"><h3>Warm Grass Milk</h3><span class="dots"></span><span class="price">$3.50</span></div><p>Steamed milk with toasted barley. For very small humans and very sleepy capybaras.</p></li>
+        </ul>
+      </div>
+
+      <div id="panel-snacks" role="tabpanel" aria-labelledby="tab-snacks" class="panel" tabindex="0" hidden>
+        <ul class="menu-list">
+          <li class="menu-item"><div class="mi-head"><h3>Watermelon Rind Cookie</h3><span class="dots"></span><span class="price">$3.25</span></div><p>Candied rind, brown butter, flaky salt. Our best seller and the reason two staff members are on a diet.</p></li>
+          <li class="menu-item"><div class="mi-head"><h3>Grass-Butter Croissant</h3><span class="dots"></span><span class="price">$4.50</span></div><p>Laminated over three days. Shatters loudly. We consider this a feature.</p></li>
+          <li class="menu-item"><div class="mi-head"><h3>Cortado Cake</h3><span class="dots"></span><span class="price">$4.75</span></div><p>A single slice of olive oil cake soaked in espresso, served at room temperature.</p></li>
+          <li class="menu-item"><div class="mi-head"><h3>Bowl of Hay <span class="tag">staff pick</span></h3><span class="dots"></span><span class="price">$1.00</span></div><p>Timothy hay, second cut. Extremely popular with the staff. Humans may order it, but we would gently steer you toward the croissant.</p></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────── BARISTAS ───────────────────── -->
+  <section class="section baristas" id="baristas" aria-labelledby="baristas-h">
+    <div class="wrap">
+      <header class="section-head reveal">
+        <h2 class="section-title" id="baristas-h">Meet the baristas</h2>
+        <p class="section-sub">Seven capybaras. Combined résumé: four hundred kilos and an unshakeable calm.</p>
+      </header>
+
+      <div class="crew">
+        <article class="crew-card reveal">
+          <div class="crew-face" style="--fur:#a9793f;--fur-light:#d7ab73;--fur-dark:#4a2f18;--blush:#c9705f"><svg viewBox="0 0 120 110" role="img" aria-label="Illustrated portrait of Chico, a capybara"><use href="#capyFace"/></svg></div>
+          <h3>Chico</h3>
+          <p class="role">Head Barista</p>
+          <p>Has never pulled a rushed shot. Once let a queue of eleven people wait while he finished a thought about water temperature. They all came back.</p>
+        </article>
+        <article class="crew-card reveal">
+          <div class="crew-face" style="--fur:#8c6239;--fur-light:#c49a68;--fur-dark:#3d2614;--blush:#bf6b57"><svg viewBox="0 0 120 110" role="img" aria-label="Illustrated portrait of Mochi, a capybara"><use href="#capyFace"/></svg></div>
+          <h3>Mochi</h3>
+          <p class="role">Roaster</p>
+          <p>Sleeps beside the drum and wakes at first crack, every time, without a timer. We have stopped asking how.</p>
+        </article>
+        <article class="crew-card reveal">
+          <div class="crew-face" style="--fur:#bd8a55;--fur-light:#e3bd8b;--fur-dark:#52341b;--blush:#d1806c"><svg viewBox="0 0 120 110" role="img" aria-label="Illustrated portrait of Dumpling, a capybara"><use href="#capyFace"/></svg></div>
+          <h3>Dumpling</h3>
+          <p class="role">Pastry</p>
+          <p>Small hands, enormous laminations. Arrives at four in the morning and leaves at ten, which she describes as "a lot of day already".</p>
+        </article>
+        <article class="crew-card reveal">
+          <div class="crew-face" style="--fur:#7d5a35;--fur-light:#b99163;--fur-dark:#382110;--blush:#c06a58"><svg viewBox="0 0 120 110" role="img" aria-label="Illustrated portrait of Tuna, a capybara"><use href="#capyFace"/></svg></div>
+          <h3>Tuna</h3>
+          <p class="role">Latte Art</p>
+          <p>Can pour a rosetta, a tulip, and a swan. Pours a capybara instead. Every time. We have made peace with it.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────── STORY ───────────────────── -->
+  <section class="section story" id="story" aria-labelledby="story-h">
+    <div class="wrap story-grid">
+      <div class="story-copy reveal">
+        <h2 class="section-title" id="story-h">How a coffee bar ends up run by capybaras</h2>
+        <p>In 2019 a secondhand roaster fell off a truck near the river. By the time anyone came back for it, the capybaras had read the manual, worked out first crack by ear, and sold nine cups to a confused cyclist.</p>
+        <p>We tried to make it a normal café. We installed an ordering app. We put up a sign about efficiency. Both were quietly eaten within a week.</p>
+        <p>So we stopped. There is no app, no queue-management strategy, and no second location. There is one bar, on one bank, and it opens when Chico gets up.</p>
+        <blockquote>
+          <p>“The coffee is genuinely excellent and it took twenty minutes and I have never felt calmer about anything.”</p>
+          <cite>— a review we have laminated and hung above the grinder</cite>
+        </blockquote>
+      </div>
+      <ol class="timeline reveal">
+        <li><span class="year">2019</span><p>Roaster acquired under circumstances that remain legally vague.</p></li>
+        <li><span class="year">2020</span><p>First bag sold to a human. He asked for it "to go". We explained.</p></li>
+        <li><span class="year">2022</span><p>Ordering app installed Monday, eaten Thursday.</p></li>
+        <li><span class="year">2024</span><p>Dumpling joins from a bakery upriver. Croissants improve immeasurably.</p></li>
+        <li><span class="year">Today</span><p>Seven staff, one bar, no plans to expand.</p></li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ───────────────────── VISIT ───────────────────── -->
+  <section class="section visit" id="visit" aria-labelledby="visit-h">
+    <div class="wrap visit-grid">
+      <div class="reveal">
+        <h2 class="section-title" id="visit-h">Come sit by the water</h2>
+        <p class="section-sub">No reservations, no online ordering. Walk down to the bank and one of us will look up eventually.</p>
+        <table class="hours">
+          <caption class="sr-only">Opening hours</caption>
+          <tbody>
+            <tr><th scope="row">Monday</th><td>Closed <span class="muted">(communal wallow)</span></td></tr>
+            <tr><th scope="row">Tuesday – Friday</th><td>7:00 – 16:00</td></tr>
+            <tr><th scope="row">Saturday</th><td>8:00 – 17:00</td></tr>
+            <tr><th scope="row">Sunday</th><td>8:00 – 14:00</td></tr>
+          </tbody>
+        </table>
+        <address class="address">
+          Riverbank No. 4, Lower Marsh Road<br>
+          Third willow past the footbridge<br>
+          <a href="tel:+15550117722">+1 (555) 011-7722</a> · <a href="mailto:hello@capyandco.coffee">hello@capyandco.coffee</a>
+        </address>
+      </div>
+      <aside class="visit-card reveal">
+        <h3>Before you come</h3>
+        <ul class="notes">
+          <li><strong>Bring cash or a card.</strong> Both work. Neither is faster.</li>
+          <li><strong>Dogs welcome</strong>, on a lead, if they are calm about very large rodents. Most are.</li>
+          <li><strong>Wi-fi exists</strong> but the password changes when Mochi feels like it.</li>
+          <li><strong>Do not feed the staff.</strong> They will accept, and then they will expect.</li>
+        </ul>
+        <a class="btn btn-primary" href="mailto:hello@capyandco.coffee">Email the bar</a>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <p class="footer-brand">Capy&nbsp;&amp;&nbsp;Co. Coffee</p>
+    <p class="footer-note">Riverbank No. 4 · Opens when Chico gets up</p>
+    <p class="footer-fine">A fictional coffee bar. No capybaras were employed, scheduled, or paid in the making of this website.</p>
+  </div>
+</footer>
+
+<script src="main.js" defer></script>
+</body>
+</html>
