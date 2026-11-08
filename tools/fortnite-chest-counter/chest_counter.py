@@ -52,6 +52,7 @@ COUNT_FILE = HERE / "chest_count.json"
 OBS_TEXT_FILE = HERE / "chest_count.txt"
 OBS_CHANCE_FILE = HERE / "token_chance.txt"
 OBS_MATCH_FILE = HERE / "match_count.txt"
+OBS_SQUAD_FILE = HERE / "squad_count.txt"
 
 DEFAULT_CONFIG: dict = {
     # Key you use to interact in Fortnite. A letter ("e", "f"), a pynput key
@@ -93,6 +94,9 @@ DEFAULT_CONFIG: dict = {
     # Token drop odds: 1 in this many chests. Used for the "chance you have
     # already got it" readout: P = 1 - (1 - 1/odds)^chests.
     "token_odds": 137500,
+    # Estimated squad-wide chests = your chests x this. Your own chests are
+    # counted exactly; teammates' can't be seen, so this is an estimate.
+    "squad_multiplier": 3.0,
     # --- per-match counter ---
     # Detect match start/end from Fortnite's log file.
     "auto_match_from_log": True,
@@ -115,7 +119,7 @@ DEFAULT_CONFIG: dict = {
 # --------------------------------------------------------------------------- #
 # Token probability
 # --------------------------------------------------------------------------- #
-def token_chance(chests: int, odds: float) -> float:
+def token_chance(chests: float, odds: float) -> float:
     """P(at least one token in `chests` independent tries at 1/odds each)."""
     if chests <= 0 or odds <= 0:
         return 0.0
@@ -181,6 +185,8 @@ class CounterStore:
         token_odds: float = DEFAULT_CONFIG["token_odds"],
         chance_path: Path | None = OBS_CHANCE_FILE,
         match_path: Path | None = OBS_MATCH_FILE,
+        squad_multiplier: float = DEFAULT_CONFIG["squad_multiplier"],
+        squad_path: Path | None = OBS_SQUAD_FILE,
         history_size: int = DEFAULT_CONFIG["match_history_size"],
         resume_window_s: float = DEFAULT_CONFIG["match_resume_window_s"],
         clock=time.time,
@@ -190,6 +196,8 @@ class CounterStore:
         self.token_odds = token_odds
         self.chance_path = chance_path
         self.match_path = match_path
+        self.squad_multiplier = max(0.0, float(squad_multiplier))
+        self.squad_path = squad_path
         self.history_size = max(1, history_size)
         self.clock = clock
         self._lock = threading.Lock()
@@ -316,10 +324,18 @@ class CounterStore:
         return done
 
     # --- read ------------------------------------------------------------- #
+    def _squad(self, chests: float) -> float:
+        return chests * self.squad_multiplier
+
     def snapshot(self) -> dict:
         with self._lock:
             played = self.matches_played
+            squad_total = self._squad(self.total)
             return {
+                "squad_multiplier": self.squad_multiplier,
+                "squad_total": squad_total,
+                "squad_chance": token_chance(squad_total, self.token_odds),
+                "squad_match_chests": self._squad(self.current["chests"]) if self.current else None,
                 "total": self.total,
                 "session": self.session,
                 "opened": self.opened,
@@ -343,6 +359,9 @@ class CounterStore:
             "last_session": self.session,
             "token_odds": self.token_odds,
             "token_chance": token_chance(self.total, self.token_odds),
+            "squad_multiplier": self.squad_multiplier,
+            "squad_total_estimate": round(self._squad(self.total)),
+            "squad_token_chance": token_chance(self._squad(self.total), self.token_odds),
             "matches_played": self.matches_played,
             "match_chests_sum": self.match_chests_sum,
             "best_match": self.best_match,
@@ -361,6 +380,13 @@ class CounterStore:
         if self.match_path is not None:
             n = self.current["chests"] if self.current else "-"
             _atomic_write(self.match_path, f"This match: {n}")
+        if self.squad_path is not None:
+            squad = self._squad(self.total)
+            chance = format_chance(token_chance(squad, self.token_odds))
+            _atomic_write(
+                self.squad_path,
+                f"Squad chests: ~{round(squad):,} (x{self.squad_multiplier:g})  Token chance: {chance}",
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -798,6 +824,7 @@ def make_store(cfg: dict) -> CounterStore:
         token_odds=cfg["token_odds"],
         history_size=cfg["match_history_size"],
         resume_window_s=cfg["match_resume_window_s"],
+        squad_multiplier=cfg["squad_multiplier"],
     )
 
 
@@ -821,6 +848,24 @@ def cmd_odds(cfg: dict) -> None:
         if avg:
             line += f", ~{math.ceil(left / avg):,} matches at your average"
         print(line + ")")
+
+    mult = snap["squad_multiplier"]
+    squad = snap["squad_total"]
+    print(f"\nSQUAD (estimate: your chests x {mult:g})")
+    print(f"Squad chests: ~{round(squad):,}")
+    print(
+        f"Chance at least one token dropped for someone in your squads: "
+        f"{format_chance(snap['squad_chance'])}\n"
+    )
+    if mult > 0:
+        for target in (0.25, 0.5, 1 - 1 / math.e, 0.9, 0.95, 0.99):
+            need = chests_for_chance(target, odds)
+            yours = math.ceil(need / mult)
+            left = max(0, yours - total)
+            line = f"  {target * 100:5.1f}% at {need:>9,} squad chests = {yours:>9,} of yours   ({left:,} to go"
+            if avg:
+                line += f", ~{math.ceil(left / avg):,} matches"
+            print(line + ")")
 
 
 def cmd_log(cfg: dict) -> None:
@@ -888,6 +933,7 @@ class App:
         print(
             f"[{time.strftime('%H:%M:%S')}] {kind:<7} {sign}{amount}  ->  total {total}{match}"
             f"  (session {snap['session']})  token chance {format_chance(snap['token_chance'])}"
+            f"  | squad ~{round(snap['squad_total']):,} -> {format_chance(snap['squad_chance'])}"
         )
         if amount > 0 and self.cfg["beep_on_count"]:
             beep()
@@ -1026,6 +1072,8 @@ class App:
             f"{format_chance(snap['token_chance'])}  "
             f"(50% at {chests_for_chance(0.5, odds):,} chests, "
             f"90% at {chests_for_chance(0.9, odds):,})\n"
+            f"  Squad estimate (x{snap['squad_multiplier']:g}): ~{round(snap['squad_total']):,} chests, "
+            f"chance {format_chance(snap['squad_chance'])}\n"
             f"  {hk['increment'].upper()} +1   {hk['decrement'].upper()} -1   "
             f"{hk['reset_session'].upper()} reset session   "
             f"{hk['toggle_auto'].upper()} pause auto-detect   "
@@ -1062,9 +1110,11 @@ class App:
 
         big = tk.Label(root, text="", font=("Segoe UI", 22, "bold"), fg="#ffd34d", bg="#111", padx=12)
         mid = tk.Label(root, text="", font=("Segoe UI", 14, "bold"), fg="#7fd4ff", bg="#111", padx=12)
+        squad = tk.Label(root, text="", font=("Segoe UI", 12, "bold"), fg="#9be89b", bg="#111", padx=12, justify="left")
         small = tk.Label(root, text="", font=("Segoe UI", 9), fg="#ccc", bg="#111", padx=12, justify="left")
         big.pack(anchor="w", pady=(6, 0))
         mid.pack(anchor="w")
+        squad.pack(anchor="w")
         small.pack(anchor="w", pady=(0, 6))
 
         drag = {}
@@ -1079,7 +1129,7 @@ class App:
             self.stop.set()
             root.destroy()
 
-        for widget in (root, big, mid, small):
+        for widget in (root, big, mid, squad, small):
             widget.bind("<Button-1>", start_drag)
             widget.bind("<B1-Motion>", do_drag)
             widget.bind("<Button-3>", quit_app)
@@ -1095,10 +1145,16 @@ class App:
             else:
                 match_line = f"This match: {s['match_chests']}  (match #{s['match_number']})"
             mid.config(text=match_line)
+            sm = s["squad_match_chests"]
+            squad.config(
+                text=f"Squad total (x{s['squad_multiplier']:g}): ~{round(s['squad_total']):,}"
+                + ("" if sm is None else f"   this match ~{round(sm)}")
+                + f"\nSquad token chance: {format_chance(s['squad_chance'])}"
+            )
             avg = "-" if s["avg_per_match"] is None else f"{s['avg_per_match']:.1f}"
             small.config(
                 text=f"avg {avg}/match  best {s['best_match']}  last {s['last_match_chests'] if s['last_match_chests'] is not None else '-'}\n"
-                f"Token chance: {format_chance(s['token_chance'])}"
+                f"Your token chance: {format_chance(s['token_chance'])}"
                 f"  (1 in {self.cfg['token_odds']:,})\n"
                 f"session {s['session']}  |  opened {s['opened']}  broken {s['broken']}"
                 f"  manual {s['manual']}\n{self.status}  |  {self.log_status}"

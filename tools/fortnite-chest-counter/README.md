@@ -74,11 +74,22 @@ P = 1 − (1 − 1/137500)^n, where n = chests counted
 
 Every chest is an independent roll, so your odds on the *next* chest stay 1 in 137,500 however many you've opened. The number only describes how lucky or unlucky your run has been so far.
 
+## Squad total (estimate)
+
+When you play squads, teammates open chests too. The counter can't see their chests, so it estimates the squad total as your chests × `squad_multiplier` (default **3**, set in `config.json`). It shows that total, the squad's share of the current match, and a second token chance:
+
+P_squad = 1 − (1 − 1/137500)^(3n)
+
+**What that number means:** it's the chance that the token has dropped *for someone in your squads*, not for you. If the token goes to whoever opens the chest, only the "your token chance" line is about you. The squad number only describes you if the token drops on the ground where any squadmate can pick it up.
+
+**Choosing the multiplier:** the squad total includes you. If your three teammates each open as many chests as you, the right value is ×4. In squad fill, teammates often die early or play differently, so ×3 is a reasonable guess but still a guess. Change it if you see different numbers.
+
 ## Files
 
 - `chest_count.json` holds the running totals (total, opened, broken, manual). It's saved after every change and loaded automatically on the next launch, so the count carries over between sessions. Only the *session* number starts again at 0 each time. A copy is kept in `chest_count.json.bak`. If the main file is ever damaged, the counts are restored from that copy and the damaged file is kept as `chest_count.json.corrupt-<date>`. To keep your count when you move or update the script, copy `chest_count.json` along with it.
 - `chest_count.txt` contains `Chests: N`. Point an OBS *Text (GDI+) → Read from file* source at it.
 - `match_count.txt` contains `This match: N` for an OBS text source (`-` while in the lobby).
+- `squad_count.txt` contains `Squad chests: ~N (x3)  Token chance: X%` for OBS.
 - `token_chance.txt` contains `Token chance: X%` for a second OBS text source.
 - `config.json` holds all settings: interact key, threshold, fps, search region, hotkeys. It's created on first run.
 

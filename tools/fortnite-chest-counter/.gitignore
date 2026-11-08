@@ -8,3 +8,4 @@ chest_count.json.bak
 *.corrupt-*
 token_chance.txt
 match_count.txt
+squad_count.txt

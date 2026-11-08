@@ -287,6 +287,27 @@ class LogTailerTests(unittest.TestCase):
         self.run_tail("utf-16-le", codecs.BOM_UTF16_LE)
 
 
+class SquadTests(unittest.TestCase):
+    def test_squad_estimate_and_chance(self):
+        from chest_counter import token_chance
+
+        with tempfile.TemporaryDirectory() as d:
+            sq = Path(d) / "sq.txt"
+            s = CounterStore(Path(d) / "c.json", None, chance_path=None, match_path=None,
+                             squad_multiplier=3, squad_path=sq)
+            s.start_match()
+            for _ in range(1000):
+                s.add("opened")
+            snap = s.snapshot()
+            self.assertEqual(snap["squad_total"], 3000)
+            self.assertEqual(snap["squad_match_chests"], 3000)
+            self.assertAlmostEqual(snap["squad_chance"], token_chance(3000, 137500))
+            self.assertGreater(snap["squad_chance"], snap["token_chance"])
+            self.assertEqual(sq.read_text(), "Squad chests: ~3,000 (x3)  Token chance: 2.158%")
+            s.end_match()
+            self.assertIsNone(s.snapshot()["squad_match_chests"])
+
+
 class TokenChanceTests(unittest.TestCase):
     def test_values(self):
         import math
