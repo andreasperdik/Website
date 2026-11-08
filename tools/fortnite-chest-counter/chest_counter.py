@@ -23,6 +23,10 @@ Commands:
   python chest_counter.py --manual    run with hotkeys only, no screen detection
   python chest_counter.py odds        chance you have had the token so far, and milestones
   python chest_counter.py log         show which Fortnite log lines start/end a match
+  python chest_counter.py add 5000    add chests you opened before using the counter
+  python chest_counter.py add -20     take some off again
+  python chest_counter.py set 12345   set your own chest total to an exact number
+  (add --squad to add/set to give a squad-wide number; it is divided by the multiplier)
 
 Per-match counting: match start/end is read from Fortnite's own log file
 (%LOCALAPPDATA%\FortniteGame\Saved\Logs\FortniteGame.log). F12 starts a new
@@ -207,6 +211,8 @@ class CounterStore:
         self.opened = int(data.get("opened", 0))
         self.broken = int(data.get("broken", 0))
         self.manual = int(data.get("manual", 0))
+        self.imported = int(data.get("imported", 0))
+        self._disk_mtime = None
         self.session = 0
 
         history = [m for m in data.get("matches", []) if isinstance(m, dict)]
@@ -252,6 +258,7 @@ class CounterStore:
     # --- chests ----------------------------------------------------------- #
     def add(self, kind: str, amount: int = 1) -> int:
         with self._lock:
+            self._sync_locked()
             if amount < 0 and self.total <= 0:
                 return self.total
             now = self.clock()
@@ -275,13 +282,55 @@ class CounterStore:
 
     def reset_session(self) -> None:
         with self._lock:
+            self._sync_locked()
             self.session = 0
             self._save()
+
+    # --- editing the total by hand ------------------------------------------ #
+    def adjust(self, amount: int) -> tuple[int, int]:
+        """Add (or remove, if negative) chests to the all-time total without
+        touching the session or the current match. Returns (before, after)."""
+        with self._lock:
+            self._sync_locked()
+            before = self.total
+            amount = max(int(amount), -self.total)  # never below zero
+            self.total += amount
+            self.imported += amount
+            self._save()
+            return before, self.total
+
+    def set_total(self, value: int) -> tuple[int, int]:
+        with self._lock:
+            self._sync_locked()
+            current = self.total
+        return self.adjust(max(0, int(value)) - current)
+
+    def _sync_locked(self) -> None:
+        """If another process (e.g. `chest_counter.py add`) changed the save
+        file while we are running, pick up its totals instead of overwriting them."""
+        try:
+            mtime = self.path.stat().st_mtime_ns
+        except OSError:
+            return
+        if self._disk_mtime is None or mtime == self._disk_mtime:
+            return
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            totals = {k: int(data.get(k, 0)) for k in ("total", "opened", "broken", "manual", "imported")}
+        except (OSError, json.JSONDecodeError, ValueError, TypeError, AttributeError):
+            return
+        self.total = totals["total"]
+        self.opened = totals["opened"]
+        self.broken = totals["broken"]
+        self.manual = totals["manual"]
+        self.imported = totals["imported"]
+        self._disk_mtime = mtime
 
     # --- matches ---------------------------------------------------------- #
     def start_match(self) -> int:
         """End the current match (if any) and start a new one. Returns its number."""
         with self._lock:
+            self._sync_locked()
             now = self.clock()
             if self.current is not None:
                 self._finalize(self.current, ended=now)
@@ -292,6 +341,7 @@ class CounterStore:
     def end_match(self) -> dict | None:
         """End the current match. Returns the finished match, or None."""
         with self._lock:
+            self._sync_locked()
             if self.current is None:
                 return None
             finished = self._finalize(self.current, ended=self.clock())
@@ -329,6 +379,7 @@ class CounterStore:
 
     def snapshot(self) -> dict:
         with self._lock:
+            self._sync_locked()
             played = self.matches_played
             squad_total = self._squad(self.total)
             return {
@@ -341,6 +392,7 @@ class CounterStore:
                 "opened": self.opened,
                 "broken": self.broken,
                 "manual": self.manual,
+                "imported": self.imported,
                 "token_chance": token_chance(self.total, self.token_odds),
                 "match_number": self.current["number"] if self.current else None,
                 "match_chests": self.current["chests"] if self.current else None,
@@ -356,6 +408,7 @@ class CounterStore:
             "opened": self.opened,
             "broken": self.broken,
             "manual": self.manual,
+            "imported": self.imported,
             "last_session": self.session,
             "token_odds": self.token_odds,
             "token_chance": token_chance(self.total, self.token_odds),
@@ -372,6 +425,10 @@ class CounterStore:
         text = json.dumps(data, indent=2)
         _atomic_write(self.path, text)
         _atomic_write(self.backup_path, text)
+        try:
+            self._disk_mtime = self.path.stat().st_mtime_ns
+        except OSError:
+            self._disk_mtime = None
         if self.obs_path is not None:
             _atomic_write(self.obs_path, f"Chests: {self.total}")
         if self.chance_path is not None:
@@ -868,6 +925,25 @@ def cmd_odds(cfg: dict) -> None:
             print(line + ")")
 
 
+def cmd_edit(cfg: dict, command: str, value: int | None, squad: bool) -> None:
+    if value is None:
+        sys.exit(f"Usage: python chest_counter.py {command} <number> [--squad]")
+    store = make_store(cfg)
+    mult = store.squad_multiplier
+    if squad:
+        if mult <= 0:
+            sys.exit("--squad needs squad_multiplier > 0 in config.json")
+        own = round(value / mult)
+        print(f"Squad number {value:,} / x{mult:g} = {own:,} of your own chests")
+        value = own
+    before, after = store.adjust(value) if command == "add" else store.set_total(value)
+    snap = store.snapshot()
+    print(f"Your chests: {before:,} -> {after:,}  ({after - before:+,})")
+    print(f"Squad estimate (x{mult:g}): ~{round(snap['squad_total']):,}")
+    print(f"Token chance (team): {format_chance(snap['squad_chance'])}")
+    print(f"Own chests only:     {format_chance(snap['token_chance'])}")
+
+
 def cmd_log(cfg: dict) -> None:
     path = resolve_log_path(cfg)
     if path is None or not path.exists():
@@ -1157,7 +1233,7 @@ class App:
                 f"Own chests only: {format_chance(s['token_chance'])}"
                 f"  (1 in {self.cfg['token_odds']:,})\n"
                 f"session {s['session']}  |  opened {s['opened']}  broken {s['broken']}"
-                f"  manual {s['manual']}\n{self.status}  |  {self.log_status}"
+                f"  manual {s['manual']}  added {s['imported']}\n{self.status}  |  {self.log_status}"
             )
             root.after(150, refresh)
 
@@ -1171,7 +1247,13 @@ class App:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Count chests opened/broken in Fortnite.")
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "calibrate", "test", "odds", "log"])
+    parser.add_argument(
+        "command", nargs="?", default="run",
+        choices=["run", "calibrate", "test", "odds", "log", "add", "set"],
+    )
+    parser.add_argument("value", nargs="?", type=int, help="number for add / set")
+    parser.add_argument("--squad", action="store_true",
+                        help="add/set: the number is a squad-wide total (divided by squad_multiplier)")
     parser.add_argument("--manual", action="store_true", help="hotkeys only, no screen detection")
     parser.add_argument("--no-overlay", action="store_true", help="console output only")
     args = parser.parse_args(argv)
@@ -1180,7 +1262,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.no_overlay:
         cfg["overlay"] = False
 
-    if args.command == "odds":
+    if args.command in ("add", "set"):
+        cmd_edit(cfg, args.command, args.value, args.squad)
+    elif args.command == "odds":
         cmd_odds(cfg)
     elif args.command == "log":
         cmd_log(cfg)

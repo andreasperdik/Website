@@ -43,6 +43,21 @@ python chest_counter.py --manual   # hotkeys only
 | F12 | start a new match by hand (ends the current one) |
 | Right-click overlay | quit |
 
+## Adding chests you opened before
+
+```bat
+python chest_counter.py add 5000           add 5,000 of your own chests
+python chest_counter.py add -20            take 20 off again
+python chest_counter.py set 12345          set your own total to exactly 12,345
+python chest_counter.py add 9000 --squad   9,000 is a squad-wide number -> adds 9000 / 3 = 3,000
+```
+
+Each command prints your total before and after, plus both token chances. Numbers you add go into the all-time total, so the squad estimate and both chances update with them. They show in the overlay as "added", separately from opened, broken and manual. The session counter, current match and per-match average stay as they are, because those chests didn't happen in a tracked match.
+
+You can run these while the counter is open. The running counter notices the change and builds on it instead of overwriting it.
+
+Enter **your own** chests. The ×3 squad multiplier is applied on top, so if your number already includes your teammates, add `--squad`, or you'll count them twice.
+
 ## Per-match counter
 
 The overlay shows **This match: N**, along with your average, best and last match. Each finished match is saved to `chest_count.json` with its start time, end time and chest count.

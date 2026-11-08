@@ -308,6 +308,39 @@ class SquadTests(unittest.TestCase):
             self.assertIsNone(s.snapshot()["squad_match_chests"])
 
 
+class ManualEditTests(unittest.TestCase):
+    def mk(self, d):
+        return CounterStore(Path(d) / "c.json", None, chance_path=None, match_path=None, squad_path=None)
+
+    def test_add_set_and_floor(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = self.mk(d)
+            s.start_match()
+            s.add("opened")
+            self.assertEqual(s.adjust(5000), (1, 5001))
+            snap = s.snapshot()
+            self.assertEqual(snap["imported"], 5000)
+            self.assertEqual(snap["match_chests"], 1)  # match untouched
+            self.assertEqual(snap["session"], 1)       # session untouched
+            self.assertEqual(s.set_total(12345), (5001, 12345))
+            self.assertEqual(s.adjust(-99999), (12345, 0))  # never negative
+            self.assertEqual(self.mk(d).snapshot()["total"], 0)
+
+    def test_running_counter_picks_up_external_edit(self):
+        import os, time
+        with tempfile.TemporaryDirectory() as d:
+            running = self.mk(d)
+            running.add("opened")
+            time.sleep(0.01)
+            other = self.mk(d)           # e.g. `chest_counter.py add 1000`
+            other.adjust(1000)
+            st = os.stat(Path(d) / "c.json")  # make sure mtime differs on coarse clocks
+            os.utime(Path(d) / "c.json", ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+            running.add("opened")        # must build on 1001, not overwrite with 2
+            self.assertEqual(running.snapshot()["total"], 1002)
+            self.assertEqual(self.mk(d).snapshot()["total"], 1002)
+
+
 class TokenChanceTests(unittest.TestCase):
     def test_values(self):
         import math
