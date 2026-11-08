@@ -145,6 +145,22 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(obs.read_text(), "Chests: 1")
 
 
+class PersistenceTests(unittest.TestCase):
+    def test_survives_restart_and_recovers_from_corruption(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "c.json"
+            s = CounterStore(p, None, chance_path=None)
+            for _ in range(42):
+                s.add("opened")
+            # "Reopen" the program.
+            self.assertEqual(CounterStore(p, None, chance_path=None).snapshot()["total"], 42)
+            # Main file damaged (e.g. power cut) -> restored from backup, not zeroed.
+            p.write_text("{garbage")
+            s3 = CounterStore(p, None, chance_path=None)
+            self.assertEqual(s3.snapshot()["total"], 42)
+            self.assertTrue(any(f.name.startswith("c.json.corrupt-") for f in Path(d).iterdir()))
+
+
 class TokenChanceTests(unittest.TestCase):
     def test_values(self):
         import math

@@ -52,7 +52,7 @@ Every chest is an independent roll, so your odds on the *next* chest stay 1 in 1
 
 ## Files
 
-- `chest_count.json` holds the running totals (total, opened, broken, manual). It's saved after every change.
+- `chest_count.json` holds the running totals (total, opened, broken, manual). It's saved after every change and loaded automatically on the next launch, so the count carries over between sessions. Only the *session* number starts again at 0 each time. A copy is kept in `chest_count.json.bak`. If the main file is ever damaged, the counts are restored from that copy and the damaged file is kept as `chest_count.json.corrupt-<date>`. To keep your count when you move or update the script, copy `chest_count.json` along with it.
 - `chest_count.txt` contains `Chests: N`. Point an OBS *Text (GDI+) → Read from file* source at it.
 - `token_chance.txt` contains `Token chance: X%` for a second OBS text source.
 - `config.json` holds all settings: interact key, threshold, fps, search region, hotkeys. It's created on first run.

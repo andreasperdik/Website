@@ -160,18 +160,35 @@ class CounterStore:
         self.token_odds = token_odds
         self.chance_path = chance_path
         self._lock = threading.Lock()
-        data = {}
-        if path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                data = {}
+        self.backup_path = path.with_suffix(path.suffix + ".bak")
+        data = self._load()
         self.total = int(data.get("total", 0))
         self.opened = int(data.get("opened", 0))
         self.broken = int(data.get("broken", 0))
         self.manual = int(data.get("manual", 0))
         self.session = 0
         self._save()
+
+    def _load(self) -> dict:
+        """Load saved counts. Falls back to the backup if the main file is
+        damaged, and never silently replaces a damaged file with zeros."""
+        for candidate in (self.path, self.backup_path):
+            if not candidate.exists():
+                continue
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+                int(data.get("total", 0))
+            except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
+                broken = candidate.with_name(
+                    f"{candidate.name}.corrupt-{time.strftime('%Y%m%d_%H%M%S')}"
+                )
+                os.replace(candidate, broken)
+                print(f"Warning: {candidate.name} was damaged; kept a copy as {broken.name}")
+                continue
+            if candidate is self.backup_path:
+                print(f"Restored counts from backup {candidate.name}")
+            return data
+        return {}
 
     def add(self, kind: str, amount: int = 1) -> int:
         with self._lock:
@@ -215,7 +232,9 @@ class CounterStore:
             "token_chance": token_chance(self.total, self.token_odds),
             "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
-        _atomic_write(self.path, json.dumps(data, indent=2))
+        text = json.dumps(data, indent=2)
+        _atomic_write(self.path, text)
+        _atomic_write(self.backup_path, text)
         if self.obs_path is not None:
             _atomic_write(self.obs_path, f"Chests: {self.total}")
         if self.chance_path is not None:
