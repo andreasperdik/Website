@@ -80,9 +80,11 @@ When you play squads, teammates open chests too. The counter can't see their che
 
 P_squad = 1 − (1 − 1/137500)^(3n)
 
-**What that number means:** it's the chance that the token has dropped *for someone in your squads*, not for you. If the token goes to whoever opens the chest, only the "your token chance" line is about you. The squad number only describes you if the token drops on the ground where any squadmate can pick it up.
+**This is your real token chance.** The token goes to the whole team, so every chest any squadmate opens is a roll for you too. The overlay shows it as **Token chance (team)**. The "own chests only" number is a lower bound: it counts only the chests you open yourself.
 
-**Choosing the multiplier:** the squad total includes you. If your three teammates each open as many chests as you, the right value is ×4. In squad fill, teammates often die early or play differently, so ×3 is a reasonable guess but still a guess. Change it if you see different numbers.
+**Why ×3 and not ×4.** The squad total includes you, so ×4 would mean three teammates who each open as many chests as you do. ×3 assumes they open about two-thirds as many each, which allows for teammates who are less efficient, die early or go AFK in squad fill. Because it errs low, the team chance is more likely to be under the truth than over it. If you know your teammates usually loot hard, or you often play in fuller squads, raise `squad_multiplier` in `config.json`.
+
+**It applies to every chest you count.** If you also play Solo or Duos, the ×3 overstates those matches. Set the multiplier for the mode you play most, or ask for a per-mode setting.
 
 ## Files
 

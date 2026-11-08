@@ -834,7 +834,7 @@ def cmd_odds(cfg: dict) -> None:
     total, avg = snap["total"], snap["avg_per_match"]
     print(f"Token odds: 1 in {odds:,} per chest")
     print(f"Chests counted: {total:,}")
-    print(f"Chance you have had at least one token by now: {format_chance(token_chance(total, odds))}")
+    print(f"Chance from your own chests only: {format_chance(token_chance(total, odds))}")
     if avg:
         print(
             f"Matches: {snap['matches_played']:,} finished, average {avg:.1f} chests/match, "
@@ -851,10 +851,10 @@ def cmd_odds(cfg: dict) -> None:
 
     mult = snap["squad_multiplier"]
     squad = snap["squad_total"]
-    print(f"\nSQUAD (estimate: your chests x {mult:g})")
+    print(f"\nWITH YOUR SQUAD (the token goes to the whole team; estimate = your chests x {mult:g})")
     print(f"Squad chests: ~{round(squad):,}")
     print(
-        f"Chance at least one token dropped for someone in your squads: "
+        f"YOUR REAL TOKEN CHANCE (team-wide drops): "
         f"{format_chance(snap['squad_chance'])}\n"
     )
     if mult > 0:
@@ -933,7 +933,7 @@ class App:
         print(
             f"[{time.strftime('%H:%M:%S')}] {kind:<7} {sign}{amount}  ->  total {total}{match}"
             f"  (session {snap['session']})  token chance {format_chance(snap['token_chance'])}"
-            f"  | squad ~{round(snap['squad_total']):,} -> {format_chance(snap['squad_chance'])}"
+            f"  | squad ~{round(snap['squad_total']):,} -> real chance {format_chance(snap['squad_chance'])}"
         )
         if amount > 0 and self.cfg["beep_on_count"]:
             beep()
@@ -1072,8 +1072,8 @@ class App:
             f"{format_chance(snap['token_chance'])}  "
             f"(50% at {chests_for_chance(0.5, odds):,} chests, "
             f"90% at {chests_for_chance(0.9, odds):,})\n"
-            f"  Squad estimate (x{snap['squad_multiplier']:g}): ~{round(snap['squad_total']):,} chests, "
-            f"chance {format_chance(snap['squad_chance'])}\n"
+            f"  Squad estimate (x{snap['squad_multiplier']:g}): ~{round(snap['squad_total']):,} chests -> "
+            f"your real token chance {format_chance(snap['squad_chance'])} (token is team-wide)\n"
             f"  {hk['increment'].upper()} +1   {hk['decrement'].upper()} -1   "
             f"{hk['reset_session'].upper()} reset session   "
             f"{hk['toggle_auto'].upper()} pause auto-detect   "
@@ -1149,12 +1149,12 @@ class App:
             squad.config(
                 text=f"Squad total (x{s['squad_multiplier']:g}): ~{round(s['squad_total']):,}"
                 + ("" if sm is None else f"   this match ~{round(sm)}")
-                + f"\nSquad token chance: {format_chance(s['squad_chance'])}"
+                + f"\nToken chance (team): {format_chance(s['squad_chance'])}"
             )
             avg = "-" if s["avg_per_match"] is None else f"{s['avg_per_match']:.1f}"
             small.config(
                 text=f"avg {avg}/match  best {s['best_match']}  last {s['last_match_chests'] if s['last_match_chests'] is not None else '-'}\n"
-                f"Your token chance: {format_chance(s['token_chance'])}"
+                f"Own chests only: {format_chance(s['token_chance'])}"
                 f"  (1 in {self.cfg['token_odds']:,})\n"
                 f"session {s['session']}  |  opened {s['opened']}  broken {s['broken']}"
                 f"  manual {s['manual']}\n{self.status}  |  {self.log_status}"
