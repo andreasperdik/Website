@@ -1,0 +1,6 @@
+__pycache__/
+config.json
+chest_count.json
+chest_count.txt
+templates/
+*.tmp
