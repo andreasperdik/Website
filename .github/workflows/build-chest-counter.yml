@@ -1,0 +1,55 @@
+name: Build Chest Counter (Windows .exe)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "tools/fortnite-chest-counter/**"
+      - ".github/workflows/build-chest-counter.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: tools/fortnite-chest-counter
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pyinstaller
+
+      - name: Unit tests
+        run: python -m unittest test_chest_counter.py -v
+
+      - name: Build exe
+        run: >
+          python -m PyInstaller --noconfirm --clean --windowed --name ChestCounter
+          --icon icon.ico --collect-data customtkinter
+          --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
+          chest_counter_app.py
+
+      - name: Smoke test (start the exe, open every page, exit)
+        run: |
+          $data = Join-Path $env:LOCALAPPDATA "ChestCounter"
+          Remove-Item -Recurse -Force $data -ErrorAction SilentlyContinue
+          $p = Start-Process -FilePath "dist\ChestCounter\ChestCounter.exe" -ArgumentList "--selftest" -PassThru
+          if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "exe did not exit within 60 s" }
+          $log = Join-Path $data "selftest.log"
+          if (-not (Test-Path $log)) { throw "no selftest.log - the exe crashed before starting" }
+          Get-Content $log
+          if ((Get-Content $log -Raw).Trim() -ne "OK") { throw "selftest failed" }
+
+      - name: Zip
+        run: Compress-Archive -Path dist\ChestCounter\* -DestinationPath ChestCounter-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ChestCounter-windows
+          path: tools/fortnite-chest-counter/ChestCounter-windows.zip
+          retention-days: 90

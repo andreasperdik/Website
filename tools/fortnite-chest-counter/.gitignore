@@ -12,3 +12,5 @@ squad_count.txt
 build/
 dist/
 *.spec
+crash.log
+selftest.log

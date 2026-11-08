@@ -1326,8 +1326,37 @@ class ChestCounterApp(ctk.CTk):
 
 
 def main():
-    app = ChestCounterApp()
-    app.mainloop()
+    """Start the app. `--selftest` opens it, checks every page, then exits;
+    the build uses this to verify the .exe really starts."""
+    selftest = "--selftest" in sys.argv
+    log = cc.HERE / ("selftest.log" if selftest else "crash.log")
+    try:
+        app = ChestCounterApp(start_engine=True)
+        if selftest:
+            def run_checks():
+                for key in app.pages:
+                    app.show(key)
+                    app.update()
+                app.engine.count("manual", +1)
+                app.engine.count("manual", -1)
+                app.set_overlay(True)
+                app.update()
+                log.write_text("OK\n", encoding="utf-8")
+                app.on_close()
+            app.after(3000, run_checks)
+        app.mainloop()
+    except Exception:
+        import traceback
+
+        log.write_text(traceback.format_exc(), encoding="utf-8")
+        if not selftest:
+            try:
+                from tkinter import messagebox
+
+                messagebox.showerror(APP_NAME, f"Chest Counter crashed. Details were saved to:\n{log}")
+            except Exception:
+                pass
+        raise
 
 
 if __name__ == "__main__":
