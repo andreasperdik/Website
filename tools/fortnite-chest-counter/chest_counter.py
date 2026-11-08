@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+r"""
 Fortnite chest counter.
 
 Counts every chest you open (hold the interact key on it) or break (hit it
@@ -22,16 +22,24 @@ Commands:
   python chest_counter.py             run the counter (overlay + hotkeys)
   python chest_counter.py --manual    run with hotkeys only, no screen detection
   python chest_counter.py odds        chance you have had the token so far, and milestones
+  python chest_counter.py log         show which Fortnite log lines start/end a match
+
+Per-match counting: match start/end is read from Fortnite's own log file
+(%LOCALAPPDATA%\FortniteGame\Saved\Logs\FortniteGame.log). F12 starts a new
+match by hand if the log isn't available or misses one.
 
 Default hotkeys while running:
   F8  +1      F9  -1      F10  reset session      F11  pause/resume auto-detect
+  F12 start a new match
 """
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import math
 import os
+import re
 import sys
 import threading
 import time
@@ -43,6 +51,7 @@ CONFIG_FILE = HERE / "config.json"
 COUNT_FILE = HERE / "chest_count.json"
 OBS_TEXT_FILE = HERE / "chest_count.txt"
 OBS_CHANCE_FILE = HERE / "token_chance.txt"
+OBS_MATCH_FILE = HERE / "match_count.txt"
 
 DEFAULT_CONFIG: dict = {
     # Key you use to interact in Fortnite. A letter ("e", "f"), a pynput key
@@ -76,6 +85,7 @@ DEFAULT_CONFIG: dict = {
         "decrement": "f9",
         "reset_session": "f10",
         "toggle_auto": "f11",
+        "new_match": "f12",
     },
     "calibrate_key": "f7",
     "overlay": True,
@@ -83,6 +93,22 @@ DEFAULT_CONFIG: dict = {
     # Token drop odds: 1 in this many chests. Used for the "chance you have
     # already got it" readout: P = 1 - (1 - 1/odds)^chests.
     "token_odds": 137500,
+    # --- per-match counter ---
+    # Detect match start/end from Fortnite's log file.
+    "auto_match_from_log": True,
+    # null = %LOCALAPPDATA%\FortniteGame\Saved\Logs\FortniteGame.log
+    "fortnite_log": None,
+    # A line matching this starts a match (any map load that isn't the lobby).
+    "match_start_regex": r"LogLoad: LoadMap: (?!.*Frontend)",
+    # A line matching this ends it (back to the lobby, or the match finished).
+    "match_end_regex": r"LogLoad: LoadMap: .*Frontend|Match State Changed from \w+ to WaitingPostMatch",
+    # Ignore a second "start" line within this many seconds of the first.
+    "match_min_gap_s": 30,
+    # If the script is restarted, continue the saved match when its last
+    # activity was within this many seconds; otherwise file it as finished.
+    "match_resume_window_s": 900,
+    # How many finished matches to keep in chest_count.json.
+    "match_history_size": 500,
 }
 
 
@@ -146,7 +172,7 @@ def _atomic_write(path: Path, text: str) -> None:
 
 
 class CounterStore:
-    """Thread-safe counter persisted to disk after every change."""
+    """Thread-safe chest + match counter, persisted to disk after every change."""
 
     def __init__(
         self,
@@ -154,11 +180,18 @@ class CounterStore:
         obs_path: Path | None = OBS_TEXT_FILE,
         token_odds: float = DEFAULT_CONFIG["token_odds"],
         chance_path: Path | None = OBS_CHANCE_FILE,
+        match_path: Path | None = OBS_MATCH_FILE,
+        history_size: int = DEFAULT_CONFIG["match_history_size"],
+        resume_window_s: float = DEFAULT_CONFIG["match_resume_window_s"],
+        clock=time.time,
     ):
         self.path = path
         self.obs_path = obs_path
         self.token_odds = token_odds
         self.chance_path = chance_path
+        self.match_path = match_path
+        self.history_size = max(1, history_size)
+        self.clock = clock
         self._lock = threading.Lock()
         self.backup_path = path.with_suffix(path.suffix + ".bak")
         data = self._load()
@@ -167,6 +200,24 @@ class CounterStore:
         self.broken = int(data.get("broken", 0))
         self.manual = int(data.get("manual", 0))
         self.session = 0
+
+        history = [m for m in data.get("matches", []) if isinstance(m, dict)]
+        self.matches: list[dict] = history[-self.history_size :]
+        self.matches_played = int(data.get("matches_played", len(history)))
+        self.match_chests_sum = int(
+            data.get("match_chests_sum", sum(int(m.get("chests", 0)) for m in history))
+        )
+        self.best_match = int(
+            data.get("best_match", max((int(m.get("chests", 0)) for m in history), default=0))
+        )
+        self.current: dict | None = None
+        saved = data.get("current_match")
+        if isinstance(saved, dict):
+            last = float(saved.get("last_activity", saved.get("started", 0)))
+            if self.clock() - last <= resume_window_s:
+                self.current = saved
+            else:
+                self._finalize(saved, ended=last)
         self._save()
 
     def _load(self) -> dict:
@@ -190,10 +241,12 @@ class CounterStore:
             return data
         return {}
 
+    # --- chests ----------------------------------------------------------- #
     def add(self, kind: str, amount: int = 1) -> int:
         with self._lock:
             if amount < 0 and self.total <= 0:
                 return self.total
+            now = self.clock()
             self.total += amount
             self.session = max(0, self.session + amount)
             if kind == "opened":
@@ -202,6 +255,13 @@ class CounterStore:
                 self.broken += amount
             else:
                 self.manual += amount
+            # A detected chest means you are in a match, even if the start of
+            # it was missed. Manual +/- between matches only touches the total.
+            if self.current is None and amount > 0 and kind in ("opened", "broken"):
+                self._start_locked(now)
+            if self.current is not None:
+                self.current["chests"] = max(0, int(self.current["chests"]) + amount)
+                self.current["last_activity"] = now
             self._save()
             return self.total
 
@@ -210,8 +270,55 @@ class CounterStore:
             self.session = 0
             self._save()
 
+    # --- matches ---------------------------------------------------------- #
+    def start_match(self) -> int:
+        """End the current match (if any) and start a new one. Returns its number."""
+        with self._lock:
+            now = self.clock()
+            if self.current is not None:
+                self._finalize(self.current, ended=now)
+            number = self._start_locked(now)
+            self._save()
+            return number
+
+    def end_match(self) -> dict | None:
+        """End the current match. Returns the finished match, or None."""
+        with self._lock:
+            if self.current is None:
+                return None
+            finished = self._finalize(self.current, ended=self.clock())
+            self.current = None
+            self._save()
+            return finished
+
+    @property
+    def in_match(self) -> bool:
+        with self._lock:
+            return self.current is not None
+
+    def _start_locked(self, now: float) -> int:
+        number = self.matches_played + 1
+        self.current = {"number": number, "started": now, "last_activity": now, "chests": 0}
+        return number
+
+    def _finalize(self, match: dict, ended: float) -> dict:
+        done = {
+            "number": int(match.get("number", self.matches_played + 1)),
+            "started": match.get("started"),
+            "ended": ended,
+            "chests": int(match.get("chests", 0)),
+        }
+        self.matches.append(done)
+        del self.matches[: -self.history_size]
+        self.matches_played += 1
+        self.match_chests_sum += done["chests"]
+        self.best_match = max(self.best_match, done["chests"])
+        return done
+
+    # --- read ------------------------------------------------------------- #
     def snapshot(self) -> dict:
         with self._lock:
+            played = self.matches_played
             return {
                 "total": self.total,
                 "session": self.session,
@@ -219,6 +326,12 @@ class CounterStore:
                 "broken": self.broken,
                 "manual": self.manual,
                 "token_chance": token_chance(self.total, self.token_odds),
+                "match_number": self.current["number"] if self.current else None,
+                "match_chests": self.current["chests"] if self.current else None,
+                "matches_played": played,
+                "avg_per_match": (self.match_chests_sum / played) if played else None,
+                "best_match": self.best_match,
+                "last_match_chests": self.matches[-1]["chests"] if self.matches else None,
             }
 
     def _save(self) -> None:
@@ -230,6 +343,11 @@ class CounterStore:
             "last_session": self.session,
             "token_odds": self.token_odds,
             "token_chance": token_chance(self.total, self.token_odds),
+            "matches_played": self.matches_played,
+            "match_chests_sum": self.match_chests_sum,
+            "best_match": self.best_match,
+            "current_match": self.current,
+            "matches": self.matches,
             "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         text = json.dumps(data, indent=2)
@@ -240,6 +358,123 @@ class CounterStore:
         if self.chance_path is not None:
             chance = format_chance(token_chance(self.total, self.token_odds))
             _atomic_write(self.chance_path, f"Token chance: {chance}")
+        if self.match_path is not None:
+            n = self.current["chests"] if self.current else "-"
+            _atomic_write(self.match_path, f"This match: {n}")
+
+
+# --------------------------------------------------------------------------- #
+# Match detection from Fortnite's log file
+# --------------------------------------------------------------------------- #
+def default_log_path() -> Path | None:
+    base = os.environ.get("LOCALAPPDATA")
+    if not base:
+        return None
+    return Path(base) / "FortniteGame" / "Saved" / "Logs" / "FortniteGame.log"
+
+
+def resolve_log_path(cfg: dict) -> Path | None:
+    return Path(cfg["fortnite_log"]).expanduser() if cfg.get("fortnite_log") else default_log_path()
+
+
+class MatchLogParser:
+    """Turns Fortnite log lines into "start" / "end" match events."""
+
+    def __init__(self, start_regex: str, end_regex: str, min_gap_s: float = 30):
+        self.start_re = re.compile(start_regex)
+        self.end_re = re.compile(end_regex)
+        self.min_gap_s = min_gap_s
+        self.in_match = False
+        self._last_start = -math.inf
+
+    def feed(self, line: str, now: float) -> str | None:
+        if self.end_re.search(line):
+            if self.in_match:
+                self.in_match = False
+                return "end"
+            return None
+        if self.start_re.search(line):
+            if self.in_match and now - self._last_start < self.min_gap_s:
+                return None  # duplicate load line for the same match
+            self.in_match = True
+            self._last_start = now
+            return "start"
+        return None
+
+
+class LogTailer:
+    """Follows FortniteGame.log (like `tail -f`), handling the file being
+    recreated each time the game launches, UTF-8 or UTF-16."""
+
+    def __init__(self, path: Path, parser: MatchLogParser, on_event, poll_s: float = 1.0):
+        self.path = path
+        self.parser = parser
+        self.on_event = on_event
+        self.poll_s = poll_s
+        self.pos: int | None = None
+        self._buf = ""
+        self._decoder = None
+
+    def _read_new(self, size: int) -> list[str]:
+        with open(self.path, "rb") as f:
+            f.seek(self.pos)
+            chunk = f.read(size - self.pos)
+        start_pos = self.pos
+        self.pos += len(chunk)
+        if start_pos == 0 or self._decoder is None:
+            if chunk.startswith(codecs.BOM_UTF16_LE):
+                self._decoder = codecs.getincrementaldecoder("utf-16-le")("replace")
+                chunk = chunk[2:]
+            else:
+                if chunk.startswith(codecs.BOM_UTF8):
+                    chunk = chunk[3:]
+                self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._buf += self._decoder.decode(chunk)
+        lines = self._buf.split("\n")
+        self._buf = lines.pop()
+        return lines
+
+    def replay_existing(self) -> bool:
+        """Read what is already in the log (without firing events) to learn
+        whether a match is in progress right now."""
+        self.pos, self._buf, self._decoder = 0, "", None
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            self.pos = None
+            return False
+        for line in self._read_new(size):
+            self.parser.feed(line, 0.0)
+        self.parser._last_start = -math.inf
+        return self.parser.in_match
+
+    def poll_once(self) -> None:
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return
+        if self.pos is None:
+            self.pos = size  # start following from the end
+            return
+        if size < self.pos:
+            # Game relaunched: the log was recreated, so any match is over.
+            self.pos, self._buf, self._decoder = 0, "", None
+            if self.parser.in_match:
+                self.parser.in_match = False
+                self.on_event("end", "(Fortnite restarted)")
+        if size > self.pos:
+            for line in self._read_new(size):
+                ev = self.parser.feed(line, time.monotonic())
+                if ev:
+                    self.on_event(ev, line.strip())
+
+    def run(self, stop: threading.Event) -> None:
+        while not stop.is_set():
+            try:
+                self.poll_once()
+            except OSError:
+                pass
+            stop.wait(self.poll_s)
 
 
 # --------------------------------------------------------------------------- #
@@ -558,22 +793,71 @@ def cmd_test(cfg: dict) -> None:
             print()
 
 
+def make_store(cfg: dict) -> CounterStore:
+    return CounterStore(
+        token_odds=cfg["token_odds"],
+        history_size=cfg["match_history_size"],
+        resume_window_s=cfg["match_resume_window_s"],
+    )
+
+
 def cmd_odds(cfg: dict) -> None:
     odds = cfg["token_odds"]
-    total = CounterStore(token_odds=odds).snapshot()["total"]
+    snap = make_store(cfg).snapshot()
+    total, avg = snap["total"], snap["avg_per_match"]
     print(f"Token odds: 1 in {odds:,} per chest")
     print(f"Chests counted: {total:,}")
-    print(f"Chance you have had at least one token by now: {format_chance(token_chance(total, odds))}\n")
+    print(f"Chance you have had at least one token by now: {format_chance(token_chance(total, odds))}")
+    if avg:
+        print(
+            f"Matches: {snap['matches_played']:,} finished, average {avg:.1f} chests/match, "
+            f"best {snap['best_match']}"
+        )
+    print()
     for target in (0.25, 0.5, 1 - 1 / math.e, 0.9, 0.95, 0.99):
         need = chests_for_chance(target, odds)
         left = max(0, need - total)
-        print(f"  {target * 100:5.1f}% at {need:>9,} chests   ({left:,} to go)")
+        line = f"  {target * 100:5.1f}% at {need:>9,} chests   ({left:,} to go"
+        if avg:
+            line += f", ~{math.ceil(left / avg):,} matches at your average"
+        print(line + ")")
+
+
+def cmd_log(cfg: dict) -> None:
+    path = resolve_log_path(cfg)
+    if path is None or not path.exists():
+        sys.exit(f"Fortnite log not found at {path}. Set \"fortnite_log\" in config.json.")
+    parser = MatchLogParser(cfg["match_start_regex"], cfg["match_end_regex"], cfg["match_min_gap_s"])
+    hint = re.compile(r"LoadMap|Match ?State|Matchmaking|Frontend", re.I)
+    print(f"Reading {path}\nLines tagged START/END are what the counter reacts to.\n")
+
+    def show(tag, line):
+        print(f"{tag:<6} {line.strip()[:200]}")
+
+    tailer = LogTailer(path, parser, on_event=lambda ev, line: None)
+    tailer.pos, tailer._decoder = 0, None
+    for line in tailer._read_new(path.stat().st_size):
+        ev = parser.feed(line, 0.0)
+        if ev:
+            show(ev.upper(), line)
+        elif hint.search(line):
+            show("", line)
+    parser._last_start = -math.inf
+    print(f"\n-- now {'IN A MATCH' if parser.in_match else 'not in a match'}; following live (Ctrl+C to stop) --\n")
+    tailer.on_event = lambda ev, line: show(ev.upper(), line)
+    try:
+        while True:
+            tailer.poll_once()
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print()
 
 
 class App:
     def __init__(self, cfg: dict, manual_only: bool):
         self.cfg = cfg
-        self.store = CounterStore(token_odds=cfg["token_odds"])
+        self.store = make_store(cfg)
+        self.log_status = "log: off"
         self.stop = threading.Event()
         self.auto_enabled = not manual_only
         self.manual_only = manual_only
@@ -600,12 +884,62 @@ class App:
         total = self.store.add(kind, amount)
         snap = self.store.snapshot()
         sign = "+" if amount > 0 else ""
+        match = "" if snap["match_chests"] is None else f"  match #{snap['match_number']}: {snap['match_chests']}"
         print(
-            f"[{time.strftime('%H:%M:%S')}] {kind:<7} {sign}{amount}  ->  total {total}"
+            f"[{time.strftime('%H:%M:%S')}] {kind:<7} {sign}{amount}  ->  total {total}{match}"
             f"  (session {snap['session']})  token chance {format_chance(snap['token_chance'])}"
         )
         if amount > 0 and self.cfg["beep_on_count"]:
             beep()
+
+    # --- matches ---------------------------------------------------------- #
+    def new_match(self, why: str) -> None:
+        prev = self.store.snapshot()
+        number = self.store.start_match()
+        if prev["match_number"] is not None:
+            print(f"[{time.strftime('%H:%M:%S')}] match #{prev['match_number']} over: {prev['match_chests']} chests")
+        print(f"[{time.strftime('%H:%M:%S')}] match #{number} started ({why})")
+
+    def finish_match(self, why: str) -> None:
+        done = self.store.end_match()
+        if done:
+            snap = self.store.snapshot()
+            avg = snap["avg_per_match"] or 0
+            print(
+                f"[{time.strftime('%H:%M:%S')}] match #{done['number']} over ({why}): "
+                f"{done['chests']} chests   (average {avg:.1f}, best {snap['best_match']})"
+            )
+
+    def on_log_event(self, event: str, line: str) -> None:
+        if event == "start":
+            self.new_match("log")
+        elif event == "end":
+            self.finish_match("log")
+
+    def start_log_watcher(self) -> None:
+        if not self.cfg["auto_match_from_log"]:
+            return
+        path = resolve_log_path(self.cfg)
+        if path is None or not path.exists():
+            self.log_status = f"log: not found ({self.cfg['hotkeys']['new_match'].upper()} = new match)"
+            print(f"Fortnite log not found at {path}; use {self.cfg['hotkeys']['new_match'].upper()} to start matches.")
+            return
+        try:
+            parser = MatchLogParser(
+                self.cfg["match_start_regex"], self.cfg["match_end_regex"], self.cfg["match_min_gap_s"]
+            )
+        except re.error as exc:
+            print(f"Bad match regex in config.json ({exc}); log watching disabled.")
+            return
+        tailer = LogTailer(path, parser, self.on_log_event)
+        # Sync with what the game is doing right now.
+        in_match = tailer.replay_existing()
+        if in_match and not self.store.in_match:
+            self.new_match("already in progress")
+        elif not in_match and self.store.in_match:
+            self.finish_match("not in a match any more")
+        threading.Thread(target=tailer.run, args=(self.stop,), daemon=True).start()
+        self.log_status = "log: watching"
 
     # --- inputs ----------------------------------------------------------- #
     def start_input_listeners(self) -> None:
@@ -627,6 +961,8 @@ class App:
             elif action == "reset_session":
                 self.store.reset_session()
                 print(f"[{time.strftime('%H:%M:%S')}] session reset")
+            elif action == "new_match":
+                self.new_match("hotkey")
             elif action == "toggle_auto" and not self.manual_only:
                 self.auto_enabled = not self.auto_enabled
                 print(f"[{time.strftime('%H:%M:%S')}] auto-detect {'ON' if self.auto_enabled else 'PAUSED'}")
@@ -677,6 +1013,7 @@ class App:
     def run(self) -> None:
         enable_dpi_awareness()
         self.start_input_listeners()
+        self.start_log_watcher()
         if not self.manual_only:
             threading.Thread(target=self.detection_loop, daemon=True).start()
 
@@ -691,7 +1028,8 @@ class App:
             f"90% at {chests_for_chance(0.9, odds):,})\n"
             f"  {hk['increment'].upper()} +1   {hk['decrement'].upper()} -1   "
             f"{hk['reset_session'].upper()} reset session   "
-            f"{hk['toggle_auto'].upper()} pause auto-detect\n"
+            f"{hk['toggle_auto'].upper()} pause auto-detect   "
+            f"{hk['new_match'].upper()} new match\n"
             "  Ctrl+C here (or right-click the overlay) to quit.\n"
         )
 
@@ -723,8 +1061,10 @@ class App:
         root.geometry("+20+20")
 
         big = tk.Label(root, text="", font=("Segoe UI", 22, "bold"), fg="#ffd34d", bg="#111", padx=12)
-        small = tk.Label(root, text="", font=("Segoe UI", 9), fg="#ccc", bg="#111", padx=12)
+        mid = tk.Label(root, text="", font=("Segoe UI", 14, "bold"), fg="#7fd4ff", bg="#111", padx=12)
+        small = tk.Label(root, text="", font=("Segoe UI", 9), fg="#ccc", bg="#111", padx=12, justify="left")
         big.pack(anchor="w", pady=(6, 0))
+        mid.pack(anchor="w")
         small.pack(anchor="w", pady=(0, 6))
 
         drag = {}
@@ -739,7 +1079,7 @@ class App:
             self.stop.set()
             root.destroy()
 
-        for widget in (root, big, small):
+        for widget in (root, big, mid, small):
             widget.bind("<Button-1>", start_drag)
             widget.bind("<B1-Motion>", do_drag)
             widget.bind("<Button-3>", quit_app)
@@ -750,11 +1090,18 @@ class App:
                 return
             s = self.store.snapshot()
             big.config(text=f"Chests: {s['total']}")
+            if s["match_chests"] is None:
+                match_line = "This match: -  (in lobby)"
+            else:
+                match_line = f"This match: {s['match_chests']}  (match #{s['match_number']})"
+            mid.config(text=match_line)
+            avg = "-" if s["avg_per_match"] is None else f"{s['avg_per_match']:.1f}"
             small.config(
-                text=f"Token chance: {format_chance(s['token_chance'])}"
+                text=f"avg {avg}/match  best {s['best_match']}  last {s['last_match_chests'] if s['last_match_chests'] is not None else '-'}\n"
+                f"Token chance: {format_chance(s['token_chance'])}"
                 f"  (1 in {self.cfg['token_odds']:,})\n"
                 f"session {s['session']}  |  opened {s['opened']}  broken {s['broken']}"
-                f"  manual {s['manual']}\n{self.status}"
+                f"  manual {s['manual']}\n{self.status}  |  {self.log_status}"
             )
             root.after(150, refresh)
 
@@ -768,7 +1115,7 @@ class App:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Count chests opened/broken in Fortnite.")
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "calibrate", "test", "odds"])
+    parser.add_argument("command", nargs="?", default="run", choices=["run", "calibrate", "test", "odds", "log"])
     parser.add_argument("--manual", action="store_true", help="hotkeys only, no screen detection")
     parser.add_argument("--no-overlay", action="store_true", help="console output only")
     args = parser.parse_args(argv)
@@ -779,6 +1126,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "odds":
         cmd_odds(cfg)
+    elif args.command == "log":
+        cmd_log(cfg)
     elif args.command == "calibrate":
         cmd_calibrate(cfg)
     elif args.command == "test":

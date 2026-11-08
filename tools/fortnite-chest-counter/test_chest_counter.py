@@ -161,6 +161,132 @@ class PersistenceTests(unittest.TestCase):
             self.assertTrue(any(f.name.startswith("c.json.corrupt-") for f in Path(d).iterdir()))
 
 
+class MatchCounterTests(unittest.TestCase):
+    def store(self, d, clock):
+        return CounterStore(Path(d) / "c.json", None, chance_path=None, match_path=Path(d) / "m.txt",
+                            resume_window_s=900, clock=lambda: clock[0])
+
+    def test_per_match_counts_and_stats(self):
+        with tempfile.TemporaryDirectory() as d:
+            clock = [1000.0]
+            s = self.store(d, clock)
+            self.assertIsNone(s.snapshot()["match_chests"])
+            s.start_match()
+            for _ in range(5):
+                s.add("opened")
+            self.assertEqual(s.snapshot()["match_chests"], 5)
+            self.assertEqual((Path(d) / "m.txt").read_text(), "This match: 5")
+            s.start_match()  # next match closes the previous one
+            s.add("broken")
+            s.add("opened")
+            s.add("opened")
+            done = s.end_match()
+            self.assertEqual(done["chests"], 3)
+            snap = s.snapshot()
+            self.assertEqual(snap["matches_played"], 2)
+            self.assertEqual(snap["total"], 8)
+            self.assertAlmostEqual(snap["avg_per_match"], 4.0)
+            self.assertEqual(snap["best_match"], 5)
+            self.assertEqual(snap["last_match_chests"], 3)
+            self.assertIsNone(s.end_match())  # already ended
+
+    def test_detected_chest_in_lobby_starts_match_but_manual_does_not(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = self.store(d, [0.0])
+            s.add("manual")
+            self.assertIsNone(s.snapshot()["match_chests"])
+            s.add("opened")
+            self.assertEqual(s.snapshot()["match_chests"], 1)
+            s.add("manual", -1)
+            s.add("manual", -1)  # never below 0 in a match
+            self.assertEqual(s.snapshot()["match_chests"], 0)
+
+    def test_match_resumes_after_quick_restart_but_not_after_long_one(self):
+        with tempfile.TemporaryDirectory() as d:
+            clock = [0.0]
+            s = self.store(d, clock)
+            s.start_match()
+            s.add("opened")
+            s.add("opened")
+            clock[0] = 300.0  # restarted 5 min later -> same match continues
+            s2 = self.store(d, clock)
+            self.assertEqual(s2.snapshot()["match_chests"], 2)
+            s2.add("opened")
+            clock[0] = 300.0 + 3600  # restarted an hour later -> match filed as finished
+            s3 = self.store(d, clock)
+            snap = s3.snapshot()
+            self.assertIsNone(snap["match_chests"])
+            self.assertEqual(snap["matches_played"], 1)
+            self.assertEqual(snap["last_match_chests"], 3)
+            self.assertEqual(snap["total"], 3)
+
+
+START = "[2026.11.08-17.40.12:123][  0]LogLoad: LoadMap: /Game/Athena/Maps/Athena_Terrain?game=/Script/X"
+LOBBY = "[2026.11.08-18.01.02:456][  0]LogLoad: LoadMap: /Game/Maps/Frontend?Name=Player"
+WIN = "[2026.11.08-18.00.00:000][  0]LogGameState: Match State Changed from InProgress to WaitingPostMatch"
+NOISE = "[2026.11.08-17.40.13:000][  0]LogTemp: something unrelated"
+
+
+def make_parser():
+    from chest_counter import DEFAULT_CONFIG, MatchLogParser
+    return MatchLogParser(DEFAULT_CONFIG["match_start_regex"], DEFAULT_CONFIG["match_end_regex"], 30)
+
+
+class LogParserTests(unittest.TestCase):
+    def test_start_end_and_lobby(self):
+        p = make_parser()
+        self.assertIsNone(p.feed(LOBBY, 0))  # lobby load while not in match
+        self.assertEqual(p.feed(START, 1), "start")
+        self.assertIsNone(p.feed(NOISE, 2))
+        self.assertIsNone(p.feed(START, 5))  # duplicate within min gap
+        self.assertEqual(p.feed(WIN, 900), "end")
+        self.assertIsNone(p.feed(LOBBY, 920))  # already ended
+        self.assertEqual(p.feed(START, 1000), "start")
+
+
+class LogTailerTests(unittest.TestCase):
+    def run_tail(self, encoding, bom):
+        from chest_counter import LogTailer
+
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "FortniteGame.log"
+
+            def write(lines, mode="ab"):
+                with open(log, mode) as f:
+                    f.write("".join(l + "\r\n" for l in lines).encode(encoding))
+
+            log.write_bytes(bom)
+            write([NOISE, LOBBY, START])  # game already in a match when we start
+            events = []
+            tail = LogTailer(log, make_parser(), lambda ev, line: events.append(ev))
+            self.assertTrue(tail.replay_existing())
+            self.assertEqual(events, [])  # replay never fires events
+            write([NOISE, LOBBY])
+            tail.poll_once()
+            self.assertEqual(events, ["end"])
+            # half a line arrives, then the rest
+            raw = (START + "\r\n").encode(encoding)
+            with open(log, "ab") as f:
+                f.write(raw[:20])
+            tail.poll_once()
+            self.assertEqual(events, ["end"])
+            with open(log, "ab") as f:
+                f.write(raw[20:])
+            tail.poll_once()
+            self.assertEqual(events, ["end", "start"])
+            # game relaunch recreates a shorter log -> current match ends
+            log.write_bytes(bom + (NOISE + "\r\n").encode(encoding))
+            tail.poll_once()
+            self.assertEqual(events, ["end", "start", "end"])
+
+    def test_utf8(self):
+        self.run_tail("utf-8", b"")
+
+    def test_utf16(self):
+        import codecs
+        self.run_tail("utf-16-le", codecs.BOM_UTF16_LE)
+
+
 class TokenChanceTests(unittest.TestCase):
     def test_values(self):
         import math

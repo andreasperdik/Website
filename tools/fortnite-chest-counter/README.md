@@ -40,7 +40,31 @@ python chest_counter.py --manual   # hotkeys only
 | F9 | −1 (fix a false count) |
 | F10 | reset the session counter |
 | F11 | pause or resume auto-detect |
+| F12 | start a new match by hand (ends the current one) |
 | Right-click overlay | quit |
+
+## Per-match counter
+
+The overlay shows **This match: N**, along with your average, best and last match. Each finished match is saved to `chest_count.json` with its start time, end time and chest count.
+
+**How matches are detected.** Fortnite writes a log while it runs, at `%LOCALAPPDATA%\FortniteGame\Saved\Logs\FortniteGame.log`. The counter follows that file:
+
+- a map load that isn't the lobby (`LogLoad: LoadMap: …`, without `Frontend`) **starts** a match
+- loading back into the lobby (`Frontend`), or `Match State Changed … to WaitingPostMatch`, **ends** it
+- a game relaunch ends any match that was still open
+
+**I haven't been able to check these log lines against your game version.** Check them once:
+
+```bat
+python chest_counter.py log
+```
+
+This prints the map and match lines already in the log, tagged `START` / `END`, then follows new lines live. Play one match and confirm you see one `START` when you drop in and one `END` when you're back in the lobby. If the tags are wrong, find the right lines in that output and change `match_start_regex` / `match_end_regex` in `config.json`.
+
+**Fallbacks:**
+- **F12** starts a new match by hand at any time.
+- A chest detected while no match is open starts one automatically, so a missed start doesn't lose chests. Manual F8/F9 in the lobby only changes the total.
+- If you restart the script within 15 minutes (`match_resume_window_s`), it carries on with the same match. After a longer gap, that match is saved as finished.
 
 ## Token chance
 
@@ -54,6 +78,7 @@ Every chest is an independent roll, so your odds on the *next* chest stay 1 in 1
 
 - `chest_count.json` holds the running totals (total, opened, broken, manual). It's saved after every change and loaded automatically on the next launch, so the count carries over between sessions. Only the *session* number starts again at 0 each time. A copy is kept in `chest_count.json.bak`. If the main file is ever damaged, the counts are restored from that copy and the damaged file is kept as `chest_count.json.corrupt-<date>`. To keep your count when you move or update the script, copy `chest_count.json` along with it.
 - `chest_count.txt` contains `Chests: N`. Point an OBS *Text (GDI+) → Read from file* source at it.
+- `match_count.txt` contains `This match: N` for an OBS text source (`-` while in the lobby).
 - `token_chance.txt` contains `Token chance: X%` for a second OBS text source.
 - `config.json` holds all settings: interact key, threshold, fps, search region, hotkeys. It's created on first run.
 
