@@ -9,3 +9,6 @@ chest_count.json.bak
 token_chance.txt
 match_count.txt
 squad_count.txt
+build/
+dist/
+*.spec

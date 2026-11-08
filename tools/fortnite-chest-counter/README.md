@@ -10,29 +10,38 @@ Fortnite has no API or log line for chest events, so the script watches from out
 
 It only captures the screen and listens to input, the same way OBS and Discord do. It never reads game memory or sends input to the game.
 
-## Setup (Windows)
+## The app
 
-```bat
-pip install -r requirements.txt
-python chest_counter.py calibrate
-```
+A desktop app with five pages:
 
-Calibration: stand at a chest so its prompt shows, press **F7**, Alt-Tab to the window that opens, and drag a tight box around the word **Chest**. Don't box *Search*, because ammo boxes say that too. Press Enter. Do this again to add extra templates, for example for a different prompt style.
+| Page | What it shows |
+| --- | --- |
+| **Dashboard** | Your chests, squad estimate, this match, this session, your team token chance with the next milestone, buttons for every action, and a live activity feed |
+| **Matches** | Matches tracked, average, best and last, a chart of your last 30 matches, and the full match history |
+| **Token odds** | Team and own-chests chances, the probability curve with "you are here", and a milestone table (chests and matches still to go) |
+| **Calibration** | Capture the chest prompt with **F7** or a 5-second timer, a two-step crop (rough box, then zoomed-in exact box), a live detection meter with a threshold slider, and your saved templates |
+| **Settings** | Every option, checked before saving and applied without a restart, plus the data folder |
 
-Check the detection:
+The sidebar shows detection, match log and hotkey status at all times. It also has a switch for the **in-game overlay**, a small always-on-top box with your chests, this match and team chance. Drag the overlay to move it; right-click it to hide it.
 
-```bat
-python chest_counter.py test
-```
+### Install and run (Windows)
 
-Look at a chest, then away from it. You want the score clearly above `match_threshold` (default 0.80) on a chest and well below it otherwise. Change the threshold in `config.json` if you need to.
+1. Install [Python 3.10+](https://www.python.org/downloads/) and tick **"Add python.exe to PATH"**.
+2. In this folder, run:
+   ```bat
+   pip install -r requirements.txt
+   ```
+3. Double-click **`ChestCounter.pyw`**. It opens with no console window. You can also run `python chest_counter.py`.
 
-Run it:
+On first launch the app opens on **Calibration**. Follow the four steps there once.
 
-```bat
-python chest_counter.py            # overlay + auto-detect + hotkeys
-python chest_counter.py --manual   # hotkeys only
-```
+### Build a standalone .exe (optional)
+
+Double-click **`build_exe.bat`**. It installs PyInstaller and builds `dist\ChestCounter\ChestCounter.exe`. You can pin that to your taskbar, and it runs without Python.
+
+The .exe keeps its data in `%LOCALAPPDATA%\ChestCounter`, not next to the .exe, because every rebuild replaces the `dist` folder. The first build copies your existing counts, settings and templates there. Settings → Data → **Open** shows the folder.
+
+### Hotkeys (work in-game)
 
 | Key | Action |
 | --- | --- |
@@ -41,9 +50,25 @@ python chest_counter.py --manual   # hotkeys only
 | F10 | reset the session counter |
 | F11 | pause or resume auto-detect |
 | F12 | start a new match by hand (ends the current one) |
-| Right-click overlay | quit |
+| F7 | take the calibration screenshot (only after clicking *Wait for F7*) |
+
+You can change all of them in Settings.
+
+### Command-line version
+
+Everything still works without the app:
+
+```bat
+python chest_counter.py run            console + overlay + auto-detect + hotkeys
+python chest_counter.py run --manual   hotkeys only
+python chest_counter.py calibrate      calibration without the app
+python chest_counter.py test           live match score in the console
+python chest_counter.py odds           token chances and milestones
+```
 
 ## Adding chests you opened before
+
+In the app: Dashboard → **Add past chests…**. Type a number, choose *My own chests* or *Whole squad*, and the dialog shows your new total and token chance before you confirm. From the command line:
 
 ```bat
 python chest_counter.py add 5000           add 5,000 of your own chests
@@ -113,7 +138,7 @@ P_squad = 1 − (1 − 1/137500)^(3n)
 ## Limitations
 
 - **Use Windowed Fullscreen.** The overlay won't show on top of exclusive fullscreen. Detection still works there.
-- **Templates only work at the resolution you calibrated at.** If you change resolution, HUD scale or language, calibrate again (delete `templates/` and `region` in `config.json`).
+- **Templates only work at the resolution you calibrated at.** If you change resolution, HUD scale or language, calibrate again (Calibration → Remove all, then add a new template).
 - **False positives.** Walking away from a chest while holding E, or while swinging, counts it. `cooldown_s` and `input_window_s` cut this down. Fix any you notice with F9.
 - **Controllers aren't supported** for auto-detection, because only keyboard and mouse input is read. Use the hotkeys instead.
 - If the script is run as a normal user while Fortnite runs as admin, Windows may block the key listener. Run both at the same privilege level.
@@ -123,3 +148,5 @@ P_squad = 1 − (1 − 1/137500)^(3n)
 ```bat
 python -m unittest test_chest_counter.py
 ```
+
+The app itself (`chest_counter_app.py`) is only UI. All counting and detection is in `chest_counter.py` (`Engine`), which the tests cover.

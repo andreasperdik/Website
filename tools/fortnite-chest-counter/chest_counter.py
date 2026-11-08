@@ -19,8 +19,9 @@ It never reads or writes game memory and never sends input to the game.
 Commands:
   python chest_counter.py calibrate   take a template of the chest prompt (do this first)
   python chest_counter.py test        print live match scores to tune the threshold
-  python chest_counter.py             run the counter (overlay + hotkeys)
-  python chest_counter.py --manual    run with hotkeys only, no screen detection
+  python chest_counter.py             open the app (or double-click ChestCounter.pyw)
+  python chest_counter.py run         console version (overlay + hotkeys)
+  python chest_counter.py run --manual  console, hotkeys only, no screen detection
   python chest_counter.py odds        chance you have had the token so far, and milestones
   python chest_counter.py log         show which Fortnite log lines start/end a match
   python chest_counter.py add 5000    add chests you opened before using the counter
@@ -49,7 +50,14 @@ import threading
 import time
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
+# Data files (counts, settings, templates) live next to the script. The built
+# .exe keeps them in %LOCALAPPDATA%\ChestCounter instead, because rebuilding
+# the .exe replaces its whole folder and would wipe them.
+if getattr(sys, "frozen", False):
+    HERE = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "ChestCounter"
+    HERE.mkdir(parents=True, exist_ok=True)
+else:
+    HERE = Path(__file__).resolve().parent
 TEMPLATES_DIR = HERE / "templates"
 CONFIG_FILE = HERE / "config.json"
 COUNT_FILE = HERE / "chest_count.json"
@@ -94,6 +102,7 @@ DEFAULT_CONFIG: dict = {
     },
     "calibrate_key": "f7",
     "overlay": True,
+    "overlay_pos": [20, 20],
     "beep_on_count": False,
     # Token drop odds: 1 in this many chests. Used for the "chance you have
     # already got it" readout: P = 1 - (1 - 1/odds)^chests.
@@ -304,6 +313,12 @@ class CounterStore:
             self._sync_locked()
             current = self.total
         return self.adjust(max(0, int(value)) - current)
+
+    def configure(self, token_odds: float, squad_multiplier: float) -> None:
+        with self._lock:
+            self.token_odds = token_odds
+            self.squad_multiplier = max(0.0, float(squad_multiplier))
+            self._save()
 
     def _sync_locked(self) -> None:
         """If another process (e.g. `chest_counter.py add`) changed the save
@@ -705,6 +720,14 @@ def enable_dpi_awareness() -> None:
             pass
 
 
+def open_mss():
+    """Screen grabber; mss >= 10 renamed mss.mss to mss.MSS."""
+    import mss
+
+    factory = getattr(mss, "MSS", None) or mss.mss
+    return factory()
+
+
 def monitor_rect(sct, index: int) -> dict:
     mons = sct.monitors
     if index < 1 or index >= len(mons):
@@ -758,6 +781,62 @@ def beep() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Calibration helpers (shared by the CLI and the app)
+# --------------------------------------------------------------------------- #
+def save_calibration(cfg: dict, img, mon: dict, x: int, y: int, bw: int, bh: int):
+    """Save the crop (x, y, bw, bh) of a monitor screenshot as a template and
+    widen the search region to cover it. Returns (template_path, region)."""
+    import cv2
+
+    if img.ndim == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY if img.shape[2] == 4 else cv2.COLOR_BGR2GRAY)
+    h, w = img.shape[:2]
+    x, y = max(0, int(x)), max(0, int(y))
+    bw, bh = min(int(bw), w - x), min(int(bh), h - y)
+    if bw < 4 or bh < 4:
+        raise ValueError("selection is too small")
+    crop = img[y : y + bh, x : x + bw]
+
+    TEMPLATES_DIR.mkdir(exist_ok=True)
+    tpl_path = TEMPLATES_DIR / f"chest_{time.strftime('%Y%m%d_%H%M%S')}.png"
+    n = 1
+    while tpl_path.exists():
+        tpl_path = TEMPLATES_DIR / f"chest_{time.strftime('%Y%m%d_%H%M%S')}_{n}.png"
+        n += 1
+    cv2.imwrite(str(tpl_path), crop)
+
+    # The prompt moves a bit depending on where the chest is, so search a
+    # generous area around where it was seen, clipped to the monitor.
+    pad_x, pad_y = max(150, bw * 2), max(120, bh * 4)
+    rx0, ry0 = max(0, x - pad_x), max(0, y - pad_y)
+    rx1, ry1 = min(w, x + bw + pad_x), min(h, y + bh + pad_y)
+    new_region = [mon["left"] + rx0, mon["top"] + ry0, rx1 - rx0, ry1 - ry0]
+
+    old = cfg.get("region")
+    if old:  # union with the existing region so every template stays covered
+        l = min(old[0], new_region[0])
+        t = min(old[1], new_region[1])
+        r = max(old[0] + old[2], new_region[0] + new_region[2])
+        b = max(old[1] + old[3], new_region[1] + new_region[3])
+        new_region = [l, t, r - l, b - t]
+    cfg["region"] = new_region
+    save_config(cfg)
+    return tpl_path, new_region
+
+
+def template_files() -> list[Path]:
+    TEMPLATES_DIR.mkdir(exist_ok=True)
+    return sorted(TEMPLATES_DIR.glob("*.png"))
+
+
+def clear_calibration(cfg: dict) -> None:
+    for f in template_files():
+        f.unlink(missing_ok=True)
+    cfg["region"] = None
+    save_config(cfg)
+
+
+# --------------------------------------------------------------------------- #
 # Commands
 # --------------------------------------------------------------------------- #
 def cmd_calibrate(cfg: dict) -> None:
@@ -780,7 +859,7 @@ def cmd_calibrate(cfg: dict) -> None:
     def on_press(key):
         name = key_name(key)
         if name == hotkey:
-            with mss.mss() as sct:
+            with open_mss() as sct:
                 rect = monitor_rect(sct, cfg["monitor"])
                 shot["img"] = grab_gray(sct, rect)
                 shot["rect"] = rect
@@ -823,28 +902,7 @@ def cmd_calibrate(cfg: dict) -> None:
     # Back to full-resolution coordinates.
     x, y = int(x / view_scale), int(y / view_scale)
     bw, bh = int(round(bw / view_scale)), int(round(bh / view_scale))
-    crop = img[y : y + bh, x : x + bw]
-
-    TEMPLATES_DIR.mkdir(exist_ok=True)
-    tpl_path = TEMPLATES_DIR / f"chest_{time.strftime('%Y%m%d_%H%M%S')}.png"
-    cv2.imwrite(str(tpl_path), crop)
-
-    # The prompt moves a bit depending on where the chest is, so search a
-    # generous area around where it was seen, clipped to the monitor.
-    pad_x, pad_y = max(150, bw * 2), max(120, bh * 4)
-    rx0, ry0 = max(0, x - pad_x), max(0, y - pad_y)
-    rx1, ry1 = min(w, x + bw + pad_x), min(h, y + bh + pad_y)
-    new_region = [mon["left"] + rx0, mon["top"] + ry0, rx1 - rx0, ry1 - ry0]
-
-    old = cfg.get("region")
-    if old:  # union with the existing region so every template stays covered
-        l = min(old[0], new_region[0])
-        t = min(old[1], new_region[1])
-        r = max(old[0] + old[2], new_region[0] + new_region[2])
-        b = max(old[1] + old[3], new_region[1] + new_region[3])
-        new_region = [l, t, r - l, b - t]
-    cfg["region"] = new_region
-    save_config(cfg)
+    tpl_path, new_region = save_calibration(cfg, img, mon, x, y, bw, bh)
 
     print(f"\nSaved template: {tpl_path}")
     print(f"Search region set to {new_region} (left, top, width, height) in config.json")
@@ -861,7 +919,7 @@ def cmd_test(cfg: dict) -> None:
     matcher = PromptMatcher(templates, cfg["search_scale"])
     thr = cfg["match_threshold"]
     print(f"Live match score (threshold {thr}). Look at chests / non-chests. Ctrl+C to stop.\n")
-    with mss.mss() as sct:
+    with open_mss() as sct:
         rect = search_rect(cfg, sct)
         try:
             while True:
@@ -974,62 +1032,130 @@ def cmd_log(cfg: dict) -> None:
         print()
 
 
-class App:
-    def __init__(self, cfg: dict, manual_only: bool):
-        self.cfg = cfg
-        self.store = make_store(cfg)
-        self.log_status = "log: off"
-        self.stop = threading.Event()
-        self.auto_enabled = not manual_only
-        self.manual_only = manual_only
-        self.status = "manual only" if manual_only else "starting"
-        self.detector = ChestEventDetector(
-            cfg["appear_frames"],
-            cfg["disappear_frames"],
-            cfg["input_window_s"],
-            cfg["cooldown_s"],
-            cfg["count_attacks"],
-        )
-        self.matcher = None
-        if not manual_only:
-            templates = load_templates()
-            if not templates:
-                sys.exit(
-                    "No templates found. Run `python chest_counter.py calibrate` first,\n"
-                    "or start with --manual to use hotkeys only."
-                )
-            self.matcher = PromptMatcher(templates, cfg["search_scale"])
+class Engine:
+    """Everything except the UI: counting, screen detection, input listeners
+    and match-log watching. UIs read state() and receive messages through
+    on_event(kind, text), where kind is "count", "match", "info" or "warn".
+    on_event may be called from background threads."""
 
-    # --- counting --------------------------------------------------------- #
+    def __init__(self, cfg: dict, manual_only: bool = False, on_event=None):
+        self.cfg = cfg
+        self.manual_only = manual_only
+        self.on_event = on_event or (lambda kind, text: None)
+        self.store = make_store(cfg)
+        self.stop_event = threading.Event()
+        self.auto_enabled = not manual_only
+        self.status = "manual only" if manual_only else "starting"
+        self.log_status = "off"
+        self.listeners_ok = False
+        self.last_score = 0.0
+        self.matcher = None
+        self.detector = ChestEventDetector(
+            cfg["appear_frames"], cfg["disappear_frames"], cfg["input_window_s"],
+            cfg["cooldown_s"], cfg["count_attacks"],
+        )
+        self._shot_cb = None
+        self._log_stop: threading.Event | None = None
+        self._listeners: list = []
+        self._held: set[str] = set()
+        self.reload_templates()
+
+    # --- helpers ------------------------------------------------------------ #
+    def emit(self, kind: str, text: str) -> None:
+        try:
+            self.on_event(kind, text)
+        except Exception:
+            pass
+
+    @property
+    def calibrated(self) -> bool:
+        return self.matcher is not None
+
+    def reload_templates(self) -> None:
+        try:
+            templates = load_templates()
+        except Exception as exc:
+            self.emit("warn", f"Could not load templates: {exc}")
+            templates = []
+        self.matcher = PromptMatcher(templates, self.cfg["search_scale"]) if templates else None
+
+    def apply_config(self, cfg: dict) -> None:
+        """Use new settings without restarting."""
+        old, self.cfg = self.cfg, cfg
+        d = self.detector
+        d.appear_frames = max(1, cfg["appear_frames"])
+        d.disappear_frames = max(1, cfg["disappear_frames"])
+        d.input_window_s = cfg["input_window_s"]
+        d.cooldown_s = cfg["cooldown_s"]
+        d.count_attacks = cfg["count_attacks"]
+        self.store.configure(cfg["token_odds"], cfg["squad_multiplier"])
+        self.reload_templates()
+        log_keys = ("auto_match_from_log", "fortnite_log", "match_start_regex", "match_end_regex", "match_min_gap_s")
+        if any(old.get(k) != cfg.get(k) for k in log_keys):
+            self.restart_log_watcher()
+
+    def state(self) -> dict:
+        s = self.store.snapshot()
+        s.update(
+            status=self.status,
+            log_status=self.log_status,
+            auto_enabled=self.auto_enabled,
+            calibrated=self.calibrated,
+            last_score=self.last_score,
+            chest_visible=self.detector.visible,
+            listeners_ok=self.listeners_ok,
+            awaiting_screenshot=self._shot_cb is not None,
+        )
+        return s
+
+    # --- counting ----------------------------------------------------------- #
     def count(self, kind: str, amount: int = 1) -> None:
         total = self.store.add(kind, amount)
         snap = self.store.snapshot()
         sign = "+" if amount > 0 else ""
-        match = "" if snap["match_chests"] is None else f"  match #{snap['match_number']}: {snap['match_chests']}"
-        print(
-            f"[{time.strftime('%H:%M:%S')}] {kind:<7} {sign}{amount}  ->  total {total}{match}"
-            f"  (session {snap['session']})  token chance {format_chance(snap['token_chance'])}"
-            f"  | squad ~{round(snap['squad_total']):,} -> real chance {format_chance(snap['squad_chance'])}"
+        match = "" if snap["match_chests"] is None else f"  ·  match #{snap['match_number']}: {snap['match_chests']}"
+        self.emit(
+            "count",
+            f"{kind} {sign}{amount}  →  total {total:,}{match}  ·  "
+            f"team chance {format_chance(snap['squad_chance'])}",
         )
         if amount > 0 and self.cfg["beep_on_count"]:
             beep()
 
-    # --- matches ---------------------------------------------------------- #
+    def add_past(self, value: int, squad: bool = False, set_total: bool = False) -> tuple[int, int]:
+        mult = self.store.squad_multiplier
+        own = round(value / mult) if squad and mult > 0 else int(value)
+        before, after = self.store.set_total(own) if set_total else self.store.adjust(own)
+        self.emit("info", f"Total edited by hand: {before:,} → {after:,} ({after - before:+,})")
+        return before, after
+
+    def reset_session(self) -> None:
+        self.store.reset_session()
+        self.emit("info", "Session reset")
+
+    def toggle_auto(self) -> bool:
+        if not self.manual_only:
+            self.auto_enabled = not self.auto_enabled
+            self.emit("info", f"Auto-detect {'on' if self.auto_enabled else 'paused'}")
+        return self.auto_enabled
+
+    # --- matches ------------------------------------------------------------ #
     def new_match(self, why: str) -> None:
         prev = self.store.snapshot()
         number = self.store.start_match()
         if prev["match_number"] is not None:
-            print(f"[{time.strftime('%H:%M:%S')}] match #{prev['match_number']} over: {prev['match_chests']} chests")
-        print(f"[{time.strftime('%H:%M:%S')}] match #{number} started ({why})")
+            self.emit("match", f"Match #{prev['match_number']} over: {prev['match_chests']} chests")
+        self.emit("match", f"Match #{number} started ({why})")
 
     def finish_match(self, why: str) -> None:
         done = self.store.end_match()
         if done:
             snap = self.store.snapshot()
             avg = snap["avg_per_match"] or 0
-            print(
-                f"[{time.strftime('%H:%M:%S')}] match #{done['number']} over ({why}): "
-                f"{done['chests']} chests   (average {avg:.1f}, best {snap['best_match']})"
+            self.emit(
+                "match",
+                f"Match #{done['number']} over ({why}): {done['chests']} chests  ·  "
+                f"average {avg:.1f}, best {snap['best_match']}",
             )
 
     def on_log_event(self, event: str, line: str) -> None:
@@ -1038,116 +1164,287 @@ class App:
         elif event == "end":
             self.finish_match("log")
 
-    def start_log_watcher(self) -> None:
+    def restart_log_watcher(self) -> None:
+        if self._log_stop is not None:
+            self._log_stop.set()
+            self._log_stop = None
         if not self.cfg["auto_match_from_log"]:
+            self.log_status = "off"
             return
         path = resolve_log_path(self.cfg)
         if path is None or not path.exists():
-            self.log_status = f"log: not found ({self.cfg['hotkeys']['new_match'].upper()} = new match)"
-            print(f"Fortnite log not found at {path}; use {self.cfg['hotkeys']['new_match'].upper()} to start matches.")
+            self.log_status = "not found"
+            where = f" at {path}" if path else ""
+            self.emit("warn", f"Fortnite log not found{where}. Use {self.cfg['hotkeys']['new_match'].upper()} "
+                              "to start matches, or set the log file in Settings.")
             return
         try:
             parser = MatchLogParser(
                 self.cfg["match_start_regex"], self.cfg["match_end_regex"], self.cfg["match_min_gap_s"]
             )
         except re.error as exc:
-            print(f"Bad match regex in config.json ({exc}); log watching disabled.")
+            self.log_status = "bad pattern"
+            self.emit("warn", f"Bad match pattern in settings ({exc}); log watching disabled.")
             return
         tailer = LogTailer(path, parser, self.on_log_event)
-        # Sync with what the game is doing right now.
-        in_match = tailer.replay_existing()
+        in_match = tailer.replay_existing()  # sync with what the game is doing now
         if in_match and not self.store.in_match:
             self.new_match("already in progress")
         elif not in_match and self.store.in_match:
             self.finish_match("not in a match any more")
-        threading.Thread(target=tailer.run, args=(self.stop,), daemon=True).start()
-        self.log_status = "log: watching"
+        stop = threading.Event()
+        self._log_stop = stop
 
-    # --- inputs ----------------------------------------------------------- #
-    def start_input_listeners(self) -> None:
-        from pynput import keyboard, mouse
+        def loop():
+            while not stop.is_set() and not self.stop_event.is_set():
+                try:
+                    tailer.poll_once()
+                except OSError:
+                    pass
+                stop.wait(tailer.poll_s)
 
-        hk = {v.lower(): k for k, v in self.cfg["hotkeys"].items()}
-        interact = self.cfg["interact_key"].lower()
-        mouse_interact = MOUSE_INTERACT.get(interact)
+        threading.Thread(target=loop, daemon=True).start()
+        self.log_status = "watching"
 
-        def on_press(key):
-            name = key_name(key)
-            if name == interact:
-                self.detector.interact(True, time.monotonic())
-            action = hk.get(name)
-            if action == "increment":
-                self.count("manual", +1)
-            elif action == "decrement":
-                self.count("manual", -1)
-            elif action == "reset_session":
-                self.store.reset_session()
-                print(f"[{time.strftime('%H:%M:%S')}] session reset")
-            elif action == "new_match":
-                self.new_match("hotkey")
-            elif action == "toggle_auto" and not self.manual_only:
-                self.auto_enabled = not self.auto_enabled
-                print(f"[{time.strftime('%H:%M:%S')}] auto-detect {'ON' if self.auto_enabled else 'PAUSED'}")
+    # --- calibration screenshots ---------------------------------------------- #
+    def request_screenshot(self, callback) -> None:
+        """callback(img_bgr, monitor_rect) runs (on a background thread) the
+        next time the calibrate key is pressed, or when take_screenshot() is called."""
+        self._shot_cb = callback
 
-        def on_release(key):
-            if key_name(key) == interact:
-                self.detector.interact(False, time.monotonic())
+    def cancel_screenshot(self) -> None:
+        self._shot_cb = None
 
-        def on_click(_x, _y, button, pressed):
-            bname = getattr(button, "name", "")
-            if bname == "left":
-                self.detector.attack(pressed, time.monotonic())
-            if mouse_interact and bname == mouse_interact:
-                self.detector.interact(pressed, time.monotonic())
+    def take_screenshot(self) -> None:
+        cb, self._shot_cb = self._shot_cb, None
+        if cb is None:
+            return
+        try:
+            import mss
+            import numpy as np
 
-        self._kb = keyboard.Listener(on_press=on_press, on_release=on_release)
-        self._ms = mouse.Listener(on_click=on_click)
-        self._kb.daemon = self._ms.daemon = True
-        self._kb.start()
-        self._ms.start()
+            with open_mss() as sct:
+                mon = monitor_rect(sct, self.cfg["monitor"])
+                img = np.asarray(sct.grab(mon))[:, :, :3].copy()
+        except Exception as exc:
+            self.emit("warn", f"Screenshot failed: {exc}")
+            return
+        cb(img, mon)
 
-    # --- capture loop ----------------------------------------------------- #
-    def detection_loop(self) -> None:
+    # --- input ---------------------------------------------------------------- #
+    def _on_press(self, key) -> None:
+        name = key_name(key)
+        cfg = self.cfg
+        if name == cfg["interact_key"].lower():
+            self.detector.interact(True, time.monotonic())
+        first = name not in self._held  # ignore key auto-repeat for hotkeys
+        self._held.add(name)
+        if not first:
+            return
+        if self._shot_cb is not None and name == cfg["calibrate_key"].lower():
+            threading.Thread(target=self.take_screenshot, daemon=True).start()
+            return
+        action = {v.lower(): k for k, v in cfg["hotkeys"].items()}.get(name)
+        if action == "increment":
+            self.count("manual", +1)
+        elif action == "decrement":
+            self.count("manual", -1)
+        elif action == "reset_session":
+            self.reset_session()
+        elif action == "new_match":
+            self.new_match("hotkey")
+        elif action == "toggle_auto":
+            self.toggle_auto()
+
+    def _on_release(self, key) -> None:
+        name = key_name(key)
+        self._held.discard(name)
+        if name == self.cfg["interact_key"].lower():
+            self.detector.interact(False, time.monotonic())
+
+    def _on_click(self, _x, _y, button, pressed) -> None:
+        bname = getattr(button, "name", "")
+        if bname == "left":
+            self.detector.attack(pressed, time.monotonic())
+        mouse_interact = MOUSE_INTERACT.get(self.cfg["interact_key"].lower())
+        if mouse_interact and bname == mouse_interact:
+            self.detector.interact(pressed, time.monotonic())
+
+    def _start_listeners(self) -> None:
+        try:
+            from pynput import keyboard, mouse
+
+            kb = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
+            ms = mouse.Listener(on_click=self._on_click)
+            kb.daemon = ms.daemon = True
+            kb.start()
+            ms.start()
+            self._listeners = [kb, ms]
+            self.listeners_ok = True
+        except Exception as exc:
+            self.listeners_ok = False
+            self.emit("warn", f"Keyboard/mouse listener unavailable ({exc}). Hotkeys and auto-detect won't work.")
+
+    # --- capture loop --------------------------------------------------------- #
+    def _detection_loop(self) -> None:
         import mss
 
-        period = 1.0 / max(1, self.cfg["fps"])
-        thr = self.cfg["match_threshold"]
-        with mss.mss() as sct:
-            rect = search_rect(self.cfg, sct)
-            while not self.stop.is_set():
+        with open_mss() as sct:
+            while not self.stop_event.is_set():
                 t0 = time.monotonic()
-                if self.auto_enabled:
-                    try:
-                        seen = self.matcher.score(grab_gray(sct, rect)) >= thr
-                    except Exception as exc:  # e.g. capture failure on display change
-                        self.status = f"capture error: {exc}"
-                        time.sleep(1)
-                        continue
-                    kind = self.detector.update(seen, t0)
-                    self.status = "chest in view" if self.detector.visible else "watching"
-                    if kind:
-                        self.count(kind)
-                else:
+                period = 1.0 / max(1, self.cfg["fps"])
+                matcher = self.matcher
+                if self.manual_only:
+                    self.status = "manual only"
+                    self.stop_event.wait(0.5)
+                    continue
+                if matcher is None:
+                    self.status = "not calibrated"
+                    self.last_score = 0.0
+                    self.stop_event.wait(0.5)
+                    continue
+                if not self.auto_enabled:
                     self.status = "paused"
-                self.stop.wait(max(0.0, period - (time.monotonic() - t0)))
+                    self.stop_event.wait(0.25)
+                    continue
+                try:
+                    score = matcher.score(grab_gray(sct, search_rect(self.cfg, sct)))
+                except Exception as exc:  # e.g. capture failure on display change
+                    self.status = f"capture error: {exc}"
+                    self.stop_event.wait(1)
+                    continue
+                self.last_score = score
+                kind = self.detector.update(score >= self.cfg["match_threshold"], t0)
+                self.status = "chest in view" if self.detector.visible else "watching"
+                if kind:
+                    self.count(kind)
+                self.stop_event.wait(max(0.0, period - (time.monotonic() - t0)))
 
-    # --- UI ---------------------------------------------------------------- #
-    def run(self) -> None:
+    # --- lifecycle ------------------------------------------------------------ #
+    def start(self) -> None:
         enable_dpi_awareness()
-        self.start_input_listeners()
-        self.start_log_watcher()
-        if not self.manual_only:
-            threading.Thread(target=self.detection_loop, daemon=True).start()
+        self._start_listeners()
+        self.restart_log_watcher()
+        threading.Thread(target=self._detection_loop, daemon=True).start()
 
+    def shutdown(self) -> None:
+        self.stop_event.set()
+        if self._log_stop is not None:
+            self._log_stop.set()
+        for listener in self._listeners:
+            try:
+                listener.stop()
+            except Exception:
+                pass
+
+
+class Overlay:
+    """Small always-on-top in-game overlay. Pass `master` to attach it to an
+    existing Tk app, or leave it None to make it the main window."""
+
+    def __init__(self, engine: Engine, master=None, on_close=None):
+        import tkinter as tk
+
+        self.engine = engine
+        self.on_close = on_close
+        self.root = tk.Tk() if master is None else tk.Toplevel(master)
+        root = self.root
+        root.title("Chest Counter overlay")
+        root.overrideredirect(True)
+        root.attributes("-topmost", True)
+        try:
+            root.attributes("-alpha", 0.88)
+        except tk.TclError:
+            pass
+        bg = "#101318"
+        root.configure(bg=bg)
+        x, y = (engine.cfg.get("overlay_pos") or [20, 20])[:2]
+        root.geometry(f"+{int(x)}+{int(y)}")
+        family = "Segoe UI" if sys.platform == "win32" else "DejaVu Sans"
+        self.total = tk.Label(root, font=(family, 20, "bold"), fg="#ffc94d", bg=bg, padx=14)
+        self.match = tk.Label(root, font=(family, 12, "bold"), fg="#5cc8ff", bg=bg, padx=14)
+        self.chance = tk.Label(root, font=(family, 11, "bold"), fg="#4fe0a0", bg=bg, padx=14)
+        self.status = tk.Label(root, font=(family, 8), fg="#8a93a6", bg=bg, padx=14)
+        self.total.pack(anchor="w", pady=(8, 0))
+        self.match.pack(anchor="w")
+        self.chance.pack(anchor="w")
+        self.status.pack(anchor="w", pady=(0, 8))
+        self._drag = (0, 0)
+        for w in (root, self.total, self.match, self.chance, self.status):
+            w.bind("<Button-1>", self._start_drag)
+            w.bind("<B1-Motion>", self._do_drag)
+            w.bind("<ButtonRelease-1>", self._end_drag)
+            w.bind("<Button-3>", lambda _e: self.close())
+        self._job = None
+        self._refresh()
+
+    def _start_drag(self, e):
+        self._drag = (e.x_root - self.root.winfo_x(), e.y_root - self.root.winfo_y())
+
+    def _do_drag(self, e):
+        self.root.geometry(f"+{e.x_root - self._drag[0]}+{e.y_root - self._drag[1]}")
+
+    def _end_drag(self, _e):
+        self.engine.cfg["overlay_pos"] = [self.root.winfo_x(), self.root.winfo_y()]
+        save_config(self.engine.cfg)
+
+    def _refresh(self):
+        if self.engine.stop_event.is_set():
+            self.close()
+            return
+        s = self.engine.state()
+        self.total.config(text=f"Chests  {s['total']:,}")
+        m = "lobby" if s["match_chests"] is None else f"{s['match_chests']}  (#{s['match_number']})"
+        self.match.config(text=f"This match  {m}")
+        self.chance.config(text=f"Team chance  {format_chance(s['squad_chance'])}")
+        self.status.config(text=f"{s['status']}  ·  right-click to hide")
+        self._job = self.root.after(200, self._refresh)
+
+    def run(self):
+        try:
+            self.root.mainloop()
+        except KeyboardInterrupt:
+            pass
+
+    def close(self):
+        if self._job is not None:
+            try:
+                self.root.after_cancel(self._job)
+            except Exception:
+                pass
+            self._job = None
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+        if self.on_close:
+            self.on_close()
+
+
+class ConsoleApp:
+    """`python chest_counter.py run`: console output plus the overlay."""
+
+    def __init__(self, cfg: dict, manual_only: bool):
+        if not manual_only and not load_templates():
+            sys.exit(
+                "No templates found. Run `python chest_counter.py calibrate` first,\n"
+                "or start with --manual to use hotkeys only."
+            )
+        self.cfg = cfg
+        self.engine = Engine(cfg, manual_only, on_event=self._print)
+
+    @staticmethod
+    def _print(kind: str, text: str) -> None:
+        print(f"[{time.strftime('%H:%M:%S')}] {text}")
+
+    def run(self) -> None:
         hk = self.cfg["hotkeys"]
-        snap = self.store.snapshot()
+        snap = self.engine.store.snapshot()
         odds = self.cfg["token_odds"]
         print(
             f"Chest counter running. Total so far: {snap['total']}\n"
-            f"  Token odds 1 in {odds:,}: chance you have had it by now "
-            f"{format_chance(snap['token_chance'])}  "
-            f"(50% at {chests_for_chance(0.5, odds):,} chests, "
-            f"90% at {chests_for_chance(0.9, odds):,})\n"
+            f"  Own chests only: {format_chance(snap['token_chance'])}  "
+            f"(1 in {odds:,}; 50% at {chests_for_chance(0.5, odds):,} chests)\n"
             f"  Squad estimate (x{snap['squad_multiplier']:g}): ~{round(snap['squad_total']):,} chests -> "
             f"your real token chance {format_chance(snap['squad_chance'])} (token is team-wide)\n"
             f"  {hk['increment'].upper()} +1   {hk['decrement'].upper()} -1   "
@@ -1156,100 +1453,27 @@ class App:
             f"{hk['new_match'].upper()} new match\n"
             "  Ctrl+C here (or right-click the overlay) to quit.\n"
         )
-
+        self.engine.start()
         if self.cfg["overlay"]:
             try:
-                self.run_overlay()
+                Overlay(self.engine, on_close=self.engine.shutdown).run()
+                self.engine.shutdown()
                 return
             except Exception as exc:  # no display / tkinter missing
                 print(f"Overlay unavailable ({exc}); running in console only.")
         try:
-            while not self.stop.is_set():
+            while not self.engine.stop_event.is_set():
                 time.sleep(0.5)
         except KeyboardInterrupt:
             pass
-        self.stop.set()
-
-    def run_overlay(self) -> None:
-        import tkinter as tk
-
-        root = tk.Tk()
-        root.title("Chest Counter")
-        root.overrideredirect(True)
-        root.attributes("-topmost", True)
-        try:
-            root.attributes("-alpha", 0.85)
-        except tk.TclError:
-            pass
-        root.configure(bg="#111")
-        root.geometry("+20+20")
-
-        big = tk.Label(root, text="", font=("Segoe UI", 22, "bold"), fg="#ffd34d", bg="#111", padx=12)
-        mid = tk.Label(root, text="", font=("Segoe UI", 14, "bold"), fg="#7fd4ff", bg="#111", padx=12)
-        squad = tk.Label(root, text="", font=("Segoe UI", 12, "bold"), fg="#9be89b", bg="#111", padx=12, justify="left")
-        small = tk.Label(root, text="", font=("Segoe UI", 9), fg="#ccc", bg="#111", padx=12, justify="left")
-        big.pack(anchor="w", pady=(6, 0))
-        mid.pack(anchor="w")
-        squad.pack(anchor="w")
-        small.pack(anchor="w", pady=(0, 6))
-
-        drag = {}
-
-        def start_drag(e):
-            drag["x"], drag["y"] = e.x, e.y
-
-        def do_drag(e):
-            root.geometry(f"+{e.x_root - drag['x']}+{e.y_root - drag['y']}")
-
-        def quit_app(_e=None):
-            self.stop.set()
-            root.destroy()
-
-        for widget in (root, big, mid, squad, small):
-            widget.bind("<Button-1>", start_drag)
-            widget.bind("<B1-Motion>", do_drag)
-            widget.bind("<Button-3>", quit_app)
-
-        def refresh():
-            if self.stop.is_set():
-                root.destroy()
-                return
-            s = self.store.snapshot()
-            big.config(text=f"Chests: {s['total']}")
-            if s["match_chests"] is None:
-                match_line = "This match: -  (in lobby)"
-            else:
-                match_line = f"This match: {s['match_chests']}  (match #{s['match_number']})"
-            mid.config(text=match_line)
-            sm = s["squad_match_chests"]
-            squad.config(
-                text=f"Squad total (x{s['squad_multiplier']:g}): ~{round(s['squad_total']):,}"
-                + ("" if sm is None else f"   this match ~{round(sm)}")
-                + f"\nToken chance (team): {format_chance(s['squad_chance'])}"
-            )
-            avg = "-" if s["avg_per_match"] is None else f"{s['avg_per_match']:.1f}"
-            small.config(
-                text=f"avg {avg}/match  best {s['best_match']}  last {s['last_match_chests'] if s['last_match_chests'] is not None else '-'}\n"
-                f"Own chests only: {format_chance(s['token_chance'])}"
-                f"  (1 in {self.cfg['token_odds']:,})\n"
-                f"session {s['session']}  |  opened {s['opened']}  broken {s['broken']}"
-                f"  manual {s['manual']}  added {s['imported']}\n{self.status}  |  {self.log_status}"
-            )
-            root.after(150, refresh)
-
-        refresh()
-        try:
-            root.mainloop()
-        except KeyboardInterrupt:
-            pass
-        self.stop.set()
+        self.engine.shutdown()
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Count chests opened/broken in Fortnite.")
     parser.add_argument(
-        "command", nargs="?", default="run",
-        choices=["run", "calibrate", "test", "odds", "log", "add", "set"],
+        "command", nargs="?", default="app",
+        choices=["app", "run", "calibrate", "test", "odds", "log", "add", "set"],
     )
     parser.add_argument("value", nargs="?", type=int, help="number for add / set")
     parser.add_argument("--squad", action="store_true",
@@ -1272,8 +1496,16 @@ def main(argv: list[str] | None = None) -> None:
         cmd_calibrate(cfg)
     elif args.command == "test":
         cmd_test(cfg)
+    elif args.command == "run":
+        ConsoleApp(cfg, manual_only=args.manual).run()
     else:
-        App(cfg, manual_only=args.manual).run()
+        try:
+            from chest_counter_app import main as app_main
+        except ImportError as exc:
+            sys.exit(f"The app needs customtkinter and pillow ({exc}).\n"
+                     "Install them with: pip install -r requirements.txt\n"
+                     "or use the console version: python chest_counter.py run")
+        app_main()
 
 
 if __name__ == "__main__":

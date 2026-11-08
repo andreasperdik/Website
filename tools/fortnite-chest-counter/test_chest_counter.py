@@ -341,6 +341,77 @@ class ManualEditTests(unittest.TestCase):
             self.assertEqual(self.mk(d).snapshot()["total"], 1002)
 
 
+class EngineTests(unittest.TestCase):
+    def setUp(self):
+        import types
+        import chest_counter as cc
+
+        self.cc = cc
+        self.tmp = tempfile.TemporaryDirectory()
+        d = Path(self.tmp.name)
+        self._orig_make_store = cc.make_store
+        cc.make_store = lambda cfg: CounterStore(
+            d / "c.json", None, chance_path=None, match_path=None, squad_path=None,
+            squad_multiplier=cfg["squad_multiplier"])
+        self.events = []
+        cfg = cc.json.loads(cc.json.dumps(cc.DEFAULT_CONFIG))
+        self.engine = cc.Engine(cfg, on_event=lambda k, t: self.events.append((k, t)))
+        self.K = lambda name: types.SimpleNamespace(char=None, name=name)
+        self.C = lambda ch: types.SimpleNamespace(char=ch)
+
+    def tearDown(self):
+        self.cc.make_store = self._orig_make_store
+        self.tmp.cleanup()
+
+    def test_hotkeys_ignore_auto_repeat(self):
+        e = self.engine
+        e._on_press(self.K("f8"))
+        e._on_press(self.K("f8"))  # Windows key repeat while held
+        e._on_press(self.K("f8"))
+        self.assertEqual(e.state()["total"], 1)
+        e._on_release(self.K("f8"))
+        e._on_press(self.K("f8"))
+        self.assertEqual(e.state()["total"], 2)
+        e._on_release(self.K("f8"))
+        e._on_press(self.K("f9"))
+        self.assertEqual(e.state()["total"], 1)
+
+    def test_new_match_hotkey_and_interact(self):
+        e = self.engine
+        e._on_press(self.K("f12"))
+        self.assertEqual(e.state()["match_number"], 1)
+        e._on_press(self.C("E"))  # shift held -> uppercase still counts
+        self.assertTrue(e.detector._interact_held)
+        e._on_release(self.C("e"))
+        self.assertFalse(e.detector._interact_held)
+        self.assertTrue(any(k == "match" for k, _ in self.events))
+
+    def test_calibrate_key_only_when_armed(self):
+        e = self.engine
+        calls = []
+        e.take_screenshot = lambda: calls.append(1)
+        e._on_press(self.K("f7"))
+        e._on_release(self.K("f7"))
+        e.request_screenshot(lambda img, mon: None)
+        e._on_press(self.K("f7"))
+        import time
+        time.sleep(0.05)
+        self.assertEqual(calls, [1])
+
+    def test_add_past_and_apply_config(self):
+        e = self.engine
+        e.add_past(9000, squad=True)          # /3
+        self.assertEqual(e.state()["total"], 3000)
+        e.add_past(100, set_total=True)
+        self.assertEqual(e.state()["total"], 100)
+        cfg = dict(e.cfg, squad_multiplier=4.0, cooldown_s=0.5, count_attacks=False)
+        e.apply_config(cfg)
+        s = e.state()
+        self.assertEqual(s["squad_total"], 400)
+        self.assertEqual(e.detector.cooldown_s, 0.5)
+        self.assertFalse(e.detector.count_attacks)
+
+
 class TokenChanceTests(unittest.TestCase):
     def test_values(self):
         import math
