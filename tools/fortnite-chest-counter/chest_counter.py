@@ -21,6 +21,7 @@ Commands:
   python chest_counter.py test        print live match scores to tune the threshold
   python chest_counter.py             run the counter (overlay + hotkeys)
   python chest_counter.py --manual    run with hotkeys only, no screen detection
+  python chest_counter.py odds        chance you have had the token so far, and milestones
 
 Default hotkeys while running:
   F8  +1      F9  -1      F10  reset session      F11  pause/resume auto-detect
@@ -41,6 +42,7 @@ TEMPLATES_DIR = HERE / "templates"
 CONFIG_FILE = HERE / "config.json"
 COUNT_FILE = HERE / "chest_count.json"
 OBS_TEXT_FILE = HERE / "chest_count.txt"
+OBS_CHANCE_FILE = HERE / "token_chance.txt"
 
 DEFAULT_CONFIG: dict = {
     # Key you use to interact in Fortnite. A letter ("e", "f"), a pynput key
@@ -78,7 +80,41 @@ DEFAULT_CONFIG: dict = {
     "calibrate_key": "f7",
     "overlay": True,
     "beep_on_count": False,
+    # Token drop odds: 1 in this many chests. Used for the "chance you have
+    # already got it" readout: P = 1 - (1 - 1/odds)^chests.
+    "token_odds": 137500,
 }
+
+
+# --------------------------------------------------------------------------- #
+# Token probability
+# --------------------------------------------------------------------------- #
+def token_chance(chests: int, odds: float) -> float:
+    """P(at least one token in `chests` independent tries at 1/odds each)."""
+    if chests <= 0 or odds <= 0:
+        return 0.0
+    if odds <= 1:
+        return 1.0
+    # log1p/expm1 keep full precision when 1/odds is tiny.
+    return -math.expm1(chests * math.log1p(-1.0 / odds))
+
+
+def chests_for_chance(target: float, odds: float) -> int:
+    """Chests needed for P(at least one token) >= target."""
+    if odds <= 1:
+        return 1
+    return math.ceil(math.log1p(-target) / math.log1p(-1.0 / odds))
+
+
+def format_chance(p: float) -> str:
+    pct = p * 100
+    if pct == 0:
+        return "0%"
+    if pct < 0.01:
+        return f"{pct:.4f}%"
+    if pct < 10:
+        return f"{pct:.3f}%"
+    return f"{pct:.2f}%"
 
 
 # --------------------------------------------------------------------------- #
@@ -112,9 +148,17 @@ def _atomic_write(path: Path, text: str) -> None:
 class CounterStore:
     """Thread-safe counter persisted to disk after every change."""
 
-    def __init__(self, path: Path = COUNT_FILE, obs_path: Path | None = OBS_TEXT_FILE):
+    def __init__(
+        self,
+        path: Path = COUNT_FILE,
+        obs_path: Path | None = OBS_TEXT_FILE,
+        token_odds: float = DEFAULT_CONFIG["token_odds"],
+        chance_path: Path | None = OBS_CHANCE_FILE,
+    ):
         self.path = path
         self.obs_path = obs_path
+        self.token_odds = token_odds
+        self.chance_path = chance_path
         self._lock = threading.Lock()
         data = {}
         if path.exists():
@@ -157,6 +201,7 @@ class CounterStore:
                 "opened": self.opened,
                 "broken": self.broken,
                 "manual": self.manual,
+                "token_chance": token_chance(self.total, self.token_odds),
             }
 
     def _save(self) -> None:
@@ -166,11 +211,16 @@ class CounterStore:
             "broken": self.broken,
             "manual": self.manual,
             "last_session": self.session,
+            "token_odds": self.token_odds,
+            "token_chance": token_chance(self.total, self.token_odds),
             "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         _atomic_write(self.path, json.dumps(data, indent=2))
         if self.obs_path is not None:
             _atomic_write(self.obs_path, f"Chests: {self.total}")
+        if self.chance_path is not None:
+            chance = format_chance(token_chance(self.total, self.token_odds))
+            _atomic_write(self.chance_path, f"Token chance: {chance}")
 
 
 # --------------------------------------------------------------------------- #
@@ -489,10 +539,22 @@ def cmd_test(cfg: dict) -> None:
             print()
 
 
+def cmd_odds(cfg: dict) -> None:
+    odds = cfg["token_odds"]
+    total = CounterStore(token_odds=odds).snapshot()["total"]
+    print(f"Token odds: 1 in {odds:,} per chest")
+    print(f"Chests counted: {total:,}")
+    print(f"Chance you have had at least one token by now: {format_chance(token_chance(total, odds))}\n")
+    for target in (0.25, 0.5, 1 - 1 / math.e, 0.9, 0.95, 0.99):
+        need = chests_for_chance(target, odds)
+        left = max(0, need - total)
+        print(f"  {target * 100:5.1f}% at {need:>9,} chests   ({left:,} to go)")
+
+
 class App:
     def __init__(self, cfg: dict, manual_only: bool):
         self.cfg = cfg
-        self.store = CounterStore()
+        self.store = CounterStore(token_odds=cfg["token_odds"])
         self.stop = threading.Event()
         self.auto_enabled = not manual_only
         self.manual_only = manual_only
@@ -521,7 +583,7 @@ class App:
         sign = "+" if amount > 0 else ""
         print(
             f"[{time.strftime('%H:%M:%S')}] {kind:<7} {sign}{amount}  ->  total {total}"
-            f"  (session {snap['session']})"
+            f"  (session {snap['session']})  token chance {format_chance(snap['token_chance'])}"
         )
         if amount > 0 and self.cfg["beep_on_count"]:
             beep()
@@ -601,8 +663,13 @@ class App:
 
         hk = self.cfg["hotkeys"]
         snap = self.store.snapshot()
+        odds = self.cfg["token_odds"]
         print(
             f"Chest counter running. Total so far: {snap['total']}\n"
+            f"  Token odds 1 in {odds:,}: chance you have had it by now "
+            f"{format_chance(snap['token_chance'])}  "
+            f"(50% at {chests_for_chance(0.5, odds):,} chests, "
+            f"90% at {chests_for_chance(0.9, odds):,})\n"
             f"  {hk['increment'].upper()} +1   {hk['decrement'].upper()} -1   "
             f"{hk['reset_session'].upper()} reset session   "
             f"{hk['toggle_auto'].upper()} pause auto-detect\n"
@@ -665,7 +732,9 @@ class App:
             s = self.store.snapshot()
             big.config(text=f"Chests: {s['total']}")
             small.config(
-                text=f"session {s['session']}  |  opened {s['opened']}  broken {s['broken']}"
+                text=f"Token chance: {format_chance(s['token_chance'])}"
+                f"  (1 in {self.cfg['token_odds']:,})\n"
+                f"session {s['session']}  |  opened {s['opened']}  broken {s['broken']}"
                 f"  manual {s['manual']}\n{self.status}"
             )
             root.after(150, refresh)
@@ -680,7 +749,7 @@ class App:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Count chests opened/broken in Fortnite.")
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "calibrate", "test"])
+    parser.add_argument("command", nargs="?", default="run", choices=["run", "calibrate", "test", "odds"])
     parser.add_argument("--manual", action="store_true", help="hotkeys only, no screen detection")
     parser.add_argument("--no-overlay", action="store_true", help="console output only")
     args = parser.parse_args(argv)
@@ -689,7 +758,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.no_overlay:
         cfg["overlay"] = False
 
-    if args.command == "calibrate":
+    if args.command == "odds":
+        cmd_odds(cfg)
+    elif args.command == "calibrate":
         cmd_calibrate(cfg)
     elif args.command == "test":
         cmd_test(cfg)

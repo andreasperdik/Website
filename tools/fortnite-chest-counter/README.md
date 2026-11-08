@@ -42,10 +42,19 @@ python chest_counter.py --manual   # hotkeys only
 | F11 | pause or resume auto-detect |
 | Right-click overlay | quit |
 
+## Token chance
+
+The overlay, the console and `python chest_counter.py odds` also show the chance that you'd have got the token by now. The odds are set by `token_odds` in `config.json` (default 1 in 137,500 per chest):
+
+P = 1 − (1 − 1/137500)^n, where n = chests counted
+
+Every chest is an independent roll, so your odds on the *next* chest stay 1 in 137,500 however many you've opened. The number only describes how lucky or unlucky your run has been so far.
+
 ## Files
 
 - `chest_count.json` holds the running totals (total, opened, broken, manual). It's saved after every change.
 - `chest_count.txt` contains `Chests: N`. Point an OBS *Text (GDI+) → Read from file* source at it.
+- `token_chance.txt` contains `Token chance: X%` for a second OBS text source.
 - `config.json` holds all settings: interact key, threshold, fps, search region, hotkeys. It's created on first run.
 
 ## Limitations

@@ -145,5 +145,20 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(obs.read_text(), "Chests: 1")
 
 
+class TokenChanceTests(unittest.TestCase):
+    def test_values(self):
+        import math
+        from chest_counter import chests_for_chance, format_chance, token_chance
+
+        odds = 137500
+        self.assertEqual(token_chance(0, odds), 0.0)
+        self.assertAlmostEqual(token_chance(1, odds), 1 / odds, places=12)
+        self.assertAlmostEqual(token_chance(odds, odds), 1 - 1 / math.e, places=5)
+        self.assertAlmostEqual(token_chance(10_000, odds), 0.070146, places=5)
+        self.assertEqual(chests_for_chance(0.5, odds), 95_308)
+        self.assertEqual(chests_for_chance(0.9, odds), 316_605)
+        self.assertEqual(format_chance(token_chance(10_000, odds)), "7.015%")
+
+
 if __name__ == "__main__":
     unittest.main()
